@@ -1,0 +1,8 @@
+packages:
+  - frontend
+
+allowBuilds:
+  unrs-resolver: false
+
+# Linker configuration for stability
+linker: hoisted

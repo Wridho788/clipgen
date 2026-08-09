@@ -1,0 +1,12 @@
+{
+  "name": "clipgen-root",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "pnpm": {
+    "overrides": {},
+    "peerDependencyRules": {
+      "ignoreMissing": []
+    }
+  }
+}

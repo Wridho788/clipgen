@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Frontend build/cache
+.next/
+out/
+*.log
+frontend/test-results/
+frontend/playwright-report/
+release-artifacts/
+
+# Backend runtime data
+backend/storage/
+backend/logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Environment
+.env
+.env.*
+!.env.example
+!frontend/.env.local
+
+# OS/editor
+.DS_Store
+Thumbs.db

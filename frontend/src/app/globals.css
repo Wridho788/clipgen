@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    letter-spacing: 0;
+  }
+}
+
+@layer components {
+  .clipgen-app {
+    background:
+      linear-gradient(rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .dark .clipgen-app {
+    background:
+      linear-gradient(rgba(34, 211, 238, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(34, 211, 238, 0.08) 1px, transparent 1px),
+      linear-gradient(180deg, #05070d 0%, #0b1020 52%, #05070d 100%);
+    background-size: 44px 44px, 44px 44px, 100% 100%;
+  }
+
+  .clipgen-panel {
+    border: 1px solid rgb(226 232 240);
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+
+  .dark .clipgen-panel {
+    border-color: rgba(148, 163, 184, 0.22);
+    background: rgba(2, 6, 23, 0.82);
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.04), 0 20px 70px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(16px);
+  }
+}

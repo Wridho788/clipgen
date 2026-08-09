@@ -1,0 +1,90 @@
+services:
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clipgen-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_VERSION=${APP_VERSION:-1.0.0}
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-tiny}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3:4b}
+      - OLLAMA_TIMEOUT_SECONDS=${OLLAMA_TIMEOUT_SECONDS:-30}
+      - OLLAMA_NUM_PREDICT=${OLLAMA_NUM_PREDICT:-220}
+      - METADATA_DEFAULT_LANGUAGE=${METADATA_DEFAULT_LANGUAGE:-id}
+      - YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS=${YOUTUBE_DOWNLOAD_TIMEOUT_SECONDS:-900}
+      - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-2048}
+      - TEMP_CLEANUP_ENABLED=${TEMP_CLEANUP_ENABLED:-true}
+      - TEMP_CLEANUP_INTERVAL_HOURS=${TEMP_CLEANUP_INTERVAL_HOURS:-6}
+      - TEMP_FILE_RETENTION_HOURS=${TEMP_FILE_RETENTION_HOURS:-24}
+      - REQUEUE_PENDING_JOBS_ON_STARTUP=${REQUEUE_PENDING_JOBS_ON_STARTUP:-true}
+    volumes:
+      # Persist database, uploads, clips, temp
+      - ./backend/storage:/app/storage
+      - ./backend/logs:/app/logs
+      # Local development: run the current application code without rebuilding
+      # the large video-processing dependency layer on every source change.
+      - ./backend/app:/app/app
+      # Persist Whisper/faster-whisper model cache across container rebuilds
+      - hf-cache:/root/.cache/huggingface
+    networks:
+      - clipgen-net
+    restart: unless-stopped
+    init: true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health/live', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: clipgen-frontend
+    ports:
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - clipgen-net
+    restart: unless-stopped
+    init: true
+
+  # Ollama (LLM server)
+  ollama:
+    profiles:
+      - ollama
+    image: ollama/ollama:latest
+    container_name: clipgen-ollama
+    ports:
+      - "${OLLAMA_HOST_PORT:-11435}:11434"
+    volumes:
+      # Persist model weights
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    networks:
+      - clipgen-net
+    restart: unless-stopped
+    # Bisa manual pre-pull: docker exec clipgen-ollama ollama pull gemma3:4b
+
+networks:
+  clipgen-net:
+    driver: bridge
+
+volumes:
+  ollama-models:
+    driver: local
+  hf-cache:
+    driver: local
