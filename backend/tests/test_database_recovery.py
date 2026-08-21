@@ -5,7 +5,7 @@ from app import database
 from app.models import Base, Clip, Job
 
 
-def test_recover_jobs_after_startup_requeues_pending_and_fails_active(monkeypatch, tmp_path):
+def test_recover_jobs_after_startup_requeues_pending_and_requires_manual_retry_for_active(monkeypatch, tmp_path):
     test_engine = create_engine(
         f"sqlite:///{tmp_path / 'app.db'}",
         connect_args={"check_same_thread": False},
@@ -67,11 +67,13 @@ def test_recover_jobs_after_startup_requeues_pending_and_fails_active(monkeypatc
 
         assert report.pending_job_ids == ("pending-job",)
         assert report.failed_jobs == 1
+        assert report.retry_job_ids == ()
         assert report.failed_clips == 1
         assert pending_job.status == "pending"
         assert pending_job.error_message is None
         assert interrupted_job.status == "failed"
         assert interrupted_job.error_message
+        assert interrupted_job.warning_message == "Jalankan ulang secara manual bila masih diperlukan."
         assert interrupted_job.completed_at is not None
         assert db.get(Job, "completed-job").status == "done"
         assert db.get(Clip, "processing-clip").status == "failed"

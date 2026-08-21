@@ -25,7 +25,12 @@ venv/
 .env
 .env.*
 !.env.example
-!frontend/.env.local
+frontend/.env.local
+
+# Local database exports and restore staging
+*.sqlite
+*.sqlite3
+backend/storage-restore-*/
 
 # OS/editor
 .DS_Store

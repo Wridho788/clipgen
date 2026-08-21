@@ -17,7 +17,11 @@ from loguru import logger
 from app.config import settings
 
 
-def generate_metadata(transcript_text: str, language: str = "id") -> dict:
+def generate_metadata(
+    transcript_text: str,
+    language: str = "id",
+    reference_hashtags: list[str] | None = None,
+) -> dict:
     """
     Generate title, caption, dan hashtag dari transcript.
     
@@ -35,21 +39,21 @@ def generate_metadata(transcript_text: str, language: str = "id") -> dict:
     defaults = _default_metadata(language)
     if not transcript_text or len(transcript_text.strip()) < 10:
         logger.warning("Transcript terlalu pendek, return default metadata")
-        return defaults
+        return _with_reference_hashtags(defaults, reference_hashtags)
 
     try:
         response = _call_ollama(transcript_text, language)
         parsed = _parse_response(response, language)
-        return parsed
+        return _with_reference_hashtags(parsed, reference_hashtags)
     except Exception as e:
         logger.error(f"Metadata generation error: {e}")
         # Fallback: extract title dari first sentence
         first_sentence = transcript_text.split(".")[0][:50]
-        return {
+        return _with_reference_hashtags({
             "title": first_sentence or defaults["title"],
             "caption": transcript_text[:100],
             "hashtags": ["content"],
-        }
+        }, reference_hashtags)
 
 
 def _call_ollama(transcript_text: str, language: str = "id") -> str:
@@ -161,6 +165,14 @@ def _normalize_hashtags(value) -> list[str]:
         if cleaned:
             tags.append(cleaned)
     return tags[:7]
+
+
+def _with_reference_hashtags(metadata: dict, reference_hashtags: list[str] | None) -> dict:
+    """Prefer relevant source-video tags while retaining AI-generated tags."""
+    if not reference_hashtags:
+        return metadata
+    merged = _normalize_hashtags([*reference_hashtags, *(metadata.get("hashtags") or [])])
+    return {**metadata, "hashtags": merged[:7]}
 
 
 def test_ollama_connection() -> bool:

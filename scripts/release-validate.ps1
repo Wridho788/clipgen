@@ -24,6 +24,7 @@ Assert-File "SPRINT4_RELEASE_READINESS.md"
 Assert-File "SPRINT3_QA_CHECKLIST.md"
 Assert-File "scripts\sprint3-validate.ps1"
 Assert-File "scripts\backup-storage.ps1"
+Assert-File "scripts\restore-storage.ps1"
 Assert-File "scripts\export-release-package.ps1"
 
 $env:FRONTEND_HOST_PORT = [string]$FrontendPort
@@ -44,11 +45,14 @@ $release = Invoke-RestMethod -Uri "$BackendUrl/api/system/release"
 if ($release.version -ne "1.0.0") {
     throw "Unexpected backend release version: $($release.version)"
 }
-if ($release.features.vertical_crop -ne $false) {
-    throw "Release contract drift: vertical_crop should be false."
+if ($release.features.vertical_crop -ne $true) {
+    throw "Release contract drift: vertical_crop should be true."
 }
 if ($release.features.youtube_subtitles -ne $true) {
     throw "Release contract drift: youtube_subtitles should be true."
+}
+if ($release.features.youtube_automatic_multi_clip -ne $true) {
+    throw "Release contract drift: automatic YouTube multi-clip should be enabled."
 }
 
 $rootPackage = Get-Content package.json | ConvertFrom-Json

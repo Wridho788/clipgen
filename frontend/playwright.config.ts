@@ -6,11 +6,14 @@ const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 30_000,
+  timeout: 60_000,
   expect: {
     timeout: 7_500,
   },
-  fullyParallel: true,
+  // Dynamic Next.js route compilation is CPU-heavy on the local Docker/dev setup.
+  // One worker keeps browser QA deterministic without reducing coverage.
+  fullyParallel: false,
+  workers: 1,
   reporter: process.env.CI ? [["dot"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL,

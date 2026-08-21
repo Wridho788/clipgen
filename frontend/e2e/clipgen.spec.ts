@@ -30,6 +30,10 @@ test.describe("ClipGen browser QA", () => {
           progress: 5,
           stage_estimates: {
             downloading: 45,
+            analyzing_intro: 5,
+            extracting: 10,
+            transcribing: 60,
+            detecting: 8,
             cutting: 20,
             generating_metadata: 10,
           },
@@ -43,7 +47,7 @@ test.describe("ClipGen browser QA", () => {
           job_id: "yt-job-1",
           status: "pending",
           estimated_processing_seconds: 120,
-          stage_estimates: { downloading: 45, cutting: 20, generating_metadata: 10 },
+          stage_estimates: { downloading: 45, analyzing_intro: 5, extracting: 10, transcribing: 60, detecting: 8, cutting: 20, generating_metadata: 10 },
         };
       },
     });
@@ -72,10 +76,11 @@ test.describe("ClipGen browser QA", () => {
     expect(receivedYoutubePost).toContain("en");
     expect(receivedYoutubePost).toContain("automatic");
     expect(receivedYoutubePost).toContain("generate_highlights");
-    expect(receivedYoutubePost).toContain("false");
+    expect(receivedYoutubePost).toContain("true");
     expect(receivedYoutubePost).toContain("generate_metadata");
     expect(receivedYoutubePost).toContain("true");
     expect(receivedYoutubePost).toContain("generate_subtitles");
+    await expect(page.getByText("Analisis intro video")).toBeVisible();
   });
 
   test("queues a YouTube manual job with selected processing options", async ({ page }) => {
@@ -104,13 +109,13 @@ test.describe("ClipGen browser QA", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "YouTube" }).click();
     await page.getByRole("button", { name: "Manual" }).click();
-    await page.getByRole("button", { name: "Crop vertical" }).click();
+    await page.getByLabel("Style visual").selectOption("crop");
     await page.getByPlaceholder("https://youtube.com/watch?v=...").fill("https://youtu.be/manual");
     await page.getByRole("button", { name: "Proses" }).click();
 
     await expect.poll(() => receivedYoutubePost).toContain("manual");
-    expect(receivedYoutubePost).toContain("crop_vertical");
-    expect(receivedYoutubePost).toContain("true");
+    expect(receivedYoutubePost).toContain("visual_style");
+    expect(receivedYoutubePost).toContain("crop");
     expect(receivedYoutubePost).toContain("generate_highlights");
     expect(receivedYoutubePost).toContain("generate_metadata");
     expect(receivedYoutubePost).toContain("generate_subtitles");
@@ -176,6 +181,11 @@ test.describe("ClipGen browser QA", () => {
     await page.getByRole("button", { name: "Simpan" }).click();
 
     await expect(page.getByText("Moment QA Final")).toBeVisible();
+    await page.getByRole("button", { name: "Klip relevan" }).click();
+    await expect(page.getByRole("button", { name: "Klip relevan" })).toHaveAttribute("aria-pressed", "true");
+
+    await page.getByRole("button", { name: "Trim" }).click();
+    await page.getByRole("button", { name: "Render trim" }).click();
   });
 });
 
@@ -205,6 +215,11 @@ async function mockApi(page: Page, options: MockApiOptions) {
 
     if (method === "GET" && path === "/api/jobs") {
       await json(route, options.jobs || []);
+      return;
+    }
+
+    if (method === "GET" && path === "/api/auth/config") {
+      await json(route, { enabled: false, registration_enabled: false });
       return;
     }
 
@@ -244,6 +259,21 @@ async function mockApi(page: Page, options: MockApiOptions) {
 
     if (method === "PATCH" && path === "/api/clips/clip-1" && options.onClipPatch) {
       await options.onClipPatch(route);
+      return;
+    }
+
+    if (method === "GET" && path === "/api/clips/clip-1/feedback") {
+      await json(route, { rating: null, reason: null, positive_count: 0, negative_count: 0 });
+      return;
+    }
+
+    if (method === "PUT" && path === "/api/clips/clip-1/feedback") {
+      await json(route, { rating: 1, reason: null, positive_count: 1, negative_count: 0 });
+      return;
+    }
+
+    if (method === "POST" && path === "/api/clips/clip-1/trim") {
+      await json(route, clipFixture({ id: "clip-1", job_id: "done-job-1", status: "processing" }));
       return;
     }
 
@@ -299,6 +329,12 @@ function jobFixture(overrides: Record<string, unknown> = {}) {
       generate_highlights: true,
       generate_metadata: true,
       generate_subtitles: false,
+      context_aware: true,
+      output_preset: "original",
+      visual_style: "clean",
+      subtitle_style: "standard",
+      hook_text: null,
+      render_acceleration: "auto",
     }),
     parent_job_id: null,
     retry_count: 0,
@@ -308,6 +344,7 @@ function jobFixture(overrides: Record<string, unknown> = {}) {
     warning_message: null,
     stage_metrics_json: null,
     stage_estimates_json: null,
+    automatic_summary_json: null,
     stage_metrics: {},
     stage_estimates: {
       extracting: 4,
@@ -316,6 +353,7 @@ function jobFixture(overrides: Record<string, unknown> = {}) {
       cutting: 8,
       generating_metadata: 10,
     },
+    automatic_summary: {},
     estimated_total_seconds: 47,
     current_stage_eta_seconds: 4,
     overall_eta_seconds: 47,
@@ -363,6 +401,14 @@ function systemMetricsFixture() {
       clips: 512 * 1024,
       temp: 128 * 1024,
     },
+    storage_policy: {
+      temp_cleanup_enabled: true,
+      temp_file_retention_hours: 24,
+      upload_retention_days: 0,
+      clip_retention_days: 0,
+      permanent_asset_cleanup_enabled: false,
+    },
+    feedback: { positive: 0, negative: 0 },
   };
 }
 
@@ -372,6 +418,7 @@ function releaseInfoFixture() {
     version: "1.0.0",
     release_channel: "local-mvp",
     environment: "single-user-local",
+    auth: { enabled: false, token_ttl_hours: 168 },
     limits: {
       max_upload_size_mb: 2048,
       youtube_download_timeout_seconds: 900,
@@ -389,8 +436,12 @@ function releaseInfoFixture() {
       youtube_subtitles: true,
       vertical_crop: true,
       youtube_manual_options: true,
+      youtube_automatic_multi_clip: true,
+      youtube_visual_intro_analysis: true,
       metadata_language_selector: true,
       playwright_e2e: true,
+      clip_quality_feedback: true,
+      local_multi_user: false,
     },
     known_risks: ["YouTube extraction can change."],
   };

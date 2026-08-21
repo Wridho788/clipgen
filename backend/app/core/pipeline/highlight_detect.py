@@ -24,6 +24,12 @@ from app.core.pipeline.transcribe import Segment
 # Kata/pola yang mengindikasikan reaksi kuat (bisa ditambah/disesuaikan)
 LAUGH_PATTERNS = re.compile(r"\b(haha+|wkwk+|hehe+|lol)\b", re.IGNORECASE)
 EXCLAMATION_PATTERN = re.compile(r"!{1,}")
+CONTEXT_PATTERNS = {
+    "humor": re.compile(r"\b(haha+|wkwk+|ngakak|lucu|joke|funny|kocak)\b", re.IGNORECASE),
+    "emotion": re.compile(r"\b(sedih|menangis|marah|takut|bangga|terharu|excited|gila|amazing|love)\b", re.IGNORECASE),
+    "payoff": re.compile(r"\b(ternyata|akhirnya|hasilnya|jadi|tiba-tiba|plot twist|the result|finally|turns out)\b", re.IGNORECASE),
+    "tension": re.compile(r"\b(tapi|namun|wait|bentar|serius|masalahnya|but)\b", re.IGNORECASE),
+}
 
 
 @dataclass
@@ -53,6 +59,17 @@ def _segment_text_score(text: str) -> float:
     return score
 
 
+def _context_score(text: str) -> float:
+    """Score clip-worthy conversational moments from transcript meaning cues."""
+    score = 0.0
+    for cue, pattern in CONTEXT_PATTERNS.items():
+        if pattern.search(text):
+            score += 1.4 if cue in {"humor", "emotion", "payoff"} else 0.7
+    if "?" in text:
+        score += 0.35  # questions commonly provide a useful hook or setup
+    return score
+
+
 def detect_highlights(
     segments: list[Segment],
     audio_path,
@@ -63,10 +80,12 @@ def detect_highlights(
     top_n: int | None = None,
     exclude_before_seconds: float = 0,
     min_separation_seconds: float = 0,
+    context_aware: bool = True,
 ) -> list[Highlight]:
     """
     Gabungkan skor audio energy + skor teks per window, ranking,
-    lalu gabungkan window berdekatan jadi klip 15-60 detik.
+    lalu gabungkan window berdekatan menjadi klip dengan durasi dinamis dalam
+    batas minimum/maksimum job (bukan panjang tetap).
     """
     if not segments or duration <= 0:
         logger.warning("No transcript segments/duration, skip highlight detection")
@@ -75,7 +94,7 @@ def detect_highlights(
     window = window_seconds or settings.highlight_window_seconds
     min_duration = min_clip_seconds or settings.highlight_min_clip_seconds
     max_duration = max_clip_seconds or settings.highlight_max_clip_seconds
-    requested_top_n = top_n or settings.highlight_top_n
+    requested_top_n = max(1, int(top_n or settings.highlight_top_n or 1))
     n_windows = max(1, int(np.ceil(duration / window)))
 
     try:
@@ -90,6 +109,8 @@ def detect_highlights(
         window_idx = int(seg.start // window)
         if 0 <= window_idx < n_windows:
             text_scores[window_idx] += _segment_text_score(seg.text)
+            if context_aware:
+                text_scores[window_idx] += _context_score(seg.text)
 
     # Samakan panjang array (audio energy windowing bisa beda jumlah dari n_windows)
     min_len = min(len(energy_scores), len(text_scores))

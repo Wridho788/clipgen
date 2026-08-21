@@ -66,7 +66,7 @@ JobService(job_id, db_session).process()
 - Background worker loop
 - Enqueue di endpoint, pull di background worker
 - Single-writer (tidak perlu distributed queue seperti Celery)
-- Startup recovery: `pending` diantrekan ulang, stage aktif ditandai failed + retry-able
+- Startup recovery: `pending` diantrekan ulang, stage aktif ditandai failed dan dapat dijalankan ulang manual
 
 ---
 

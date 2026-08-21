@@ -17,6 +17,12 @@ async def test_upload_estimate_contract_skips_youtube_only_stages():
         generate_highlights=None,
         generate_metadata=None,
         generate_subtitles=None,
+        context_aware=None,
+        output_preset=None,
+        visual_style=None,
+        subtitle_style=None,
+        hook_text=None,
+        render_acceleration=None,
     )
 
     assert response.source_type == "upload"
@@ -43,6 +49,12 @@ async def test_youtube_estimate_contract_includes_download_and_manual_subtitle()
         generate_highlights=None,
         generate_metadata=None,
         generate_subtitles=True,
+        context_aware=None,
+        output_preset=None,
+        visual_style=None,
+        subtitle_style=None,
+        hook_text=None,
+        render_acceleration=None,
     )
 
     assert response.source_type == "youtube_url"
@@ -66,6 +78,12 @@ async def test_youtube_automatic_estimate_includes_multi_clip_detection():
         generate_highlights=None,
         generate_metadata=None,
         generate_subtitles=None,
+        context_aware=None,
+        output_preset=None,
+        visual_style=None,
+        subtitle_style=None,
+        hook_text=None,
+        render_acceleration=None,
     )
 
     assert response.stage_estimates["downloading"] > 0

@@ -8,6 +8,7 @@ import { useNow } from "@/hooks/useNow";
 
 const STAGE_ORDER: JobStatus[] = [
   "downloading",
+  "analyzing_intro",
   "extracting",
   "transcribing",
   "detecting",
@@ -25,6 +26,7 @@ export function JobStageTimeline({ job }: { job: JobResponse }) {
   const isFailed = job.status === "failed";
   const isCancelled = job.status === "cancelled";
   const currentStageEta = Math.max(0, job.current_stage_eta_seconds - Math.max(0, (now - snapshotAt) / 1000));
+  const activityAt = job.heartbeat_at || job.updated_at;
 
   useEffect(() => {
     setSnapshotAt(Date.now());
@@ -34,7 +36,7 @@ export function JobStageTimeline({ job }: { job: JobResponse }) {
     <section className="clipgen-panel p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipeline</h2>
-        <span className="text-xs text-slate-500 dark:text-slate-400">Updated {new Date(job.updated_at).toLocaleTimeString("id-ID")}</span>
+        <span className="text-xs text-slate-500 dark:text-slate-400">Aktivitas {new Date(activityAt).toLocaleTimeString("id-ID")}</span>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

@@ -11,9 +11,10 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.security import get_current_user
 from app.core.pipeline.audio_extract import has_audio_stream
 from app.database import get_db
-from app.models import Job
+from app.models import Job, User
 from app.schemas import (
     JobCreateResponse,
     JobProcessingOptions,
@@ -21,6 +22,7 @@ from app.schemas import (
     default_processing_options,
 )
 from app.services.job_dispatcher import enqueue_job
+from app.services.eta_calibration import calibrate_stage_estimates
 from app.services.media_probe import probe_video
 from app.services.processing_estimator import build_stage_estimates, total_estimate_seconds
 
@@ -40,6 +42,12 @@ async def estimate_processing_time(
     generate_highlights: bool | None = Query(None),
     generate_metadata: bool | None = Query(None),
     generate_subtitles: bool | None = Query(None),
+    context_aware: bool | None = Query(None),
+    output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Query(None),
+    visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Query(None),
+    subtitle_style: Literal["standard", "karaoke"] | None = Query(None),
+    hook_text: str | None = Query(None),
+    render_acceleration: Literal["auto", "cpu", "gpu"] | None = Query(None),
 ):
     """Return the same conservative estimate that will be attached to a new job."""
     options = _processing_options_from_values(
@@ -52,6 +60,12 @@ async def estimate_processing_time(
         generate_highlights,
         generate_metadata,
         generate_subtitles,
+        context_aware,
+        output_preset,
+        visual_style,
+        subtitle_style,
+        hook_text,
+        render_acceleration,
     )
     stage_estimates = build_stage_estimates(duration_seconds, source_type, options)
     return ProcessingEstimateResponse(
@@ -74,7 +88,14 @@ async def upload_video(
     generate_highlights: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
     generate_subtitles: bool | None = Form(None),
+    context_aware: bool | None = Form(None),
+    output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Form(None),
+    visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
+    subtitle_style: Literal["standard", "karaoke"] | None = Form(None),
+    hook_text: str | None = Form(None),
+    render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Store a local video, validate its media streams, then queue processing."""
     job_id = str(uuid.uuid4())
@@ -116,6 +137,12 @@ async def upload_video(
         generate_highlights,
         generate_metadata,
         generate_subtitles,
+        context_aware,
+        output_preset,
+        visual_style,
+        subtitle_style,
+        hook_text,
+        render_acceleration,
     )
     if (processing_options.generate_highlights or processing_options.generate_subtitles) and not has_audio_stream(saved_path):
         saved_path.unlink(missing_ok=True)
@@ -124,13 +151,18 @@ async def upload_video(
             detail="Video tidak punya audio track. Upload video dengan suara/speech agar bisa diproses.",
         )
 
-    stage_estimates = build_stage_estimates(
-        video_info.duration_seconds,
+    stage_estimates, _ = calibrate_stage_estimates(
+        db,
         "upload",
-        processing_options,
+        build_stage_estimates(
+            video_info.duration_seconds,
+            "upload",
+            processing_options,
+        ),
     )
     job = Job(
         id=job_id,
+        owner_id=current_user.id,
         source_type="upload",
         source_path=str(saved_path),
         source_name=Path(file.filename or "video").name,
@@ -160,7 +192,14 @@ async def process_youtube(
     generate_highlights: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
     generate_subtitles: bool | None = Form(None),
+    context_aware: bool | None = Form(None),
+    output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Form(None),
+    visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
+    subtitle_style: Literal["standard", "karaoke"] | None = Form(None),
+    hook_text: str | None = Form(None),
+    render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Queue YouTube downloading in the worker so the UI gets a job immediately."""
     normalized_url = url.strip()
@@ -177,10 +216,21 @@ async def process_youtube(
         generate_highlights,
         generate_metadata,
         generate_subtitles,
+        context_aware,
+        output_preset,
+        visual_style,
+        subtitle_style,
+        hook_text,
+        render_acceleration,
     )
-    stage_estimates = build_stage_estimates(None, "youtube_url", processing_options)
+    stage_estimates, _ = calibrate_stage_estimates(
+        db,
+        "youtube_url",
+        build_stage_estimates(None, "youtube_url", processing_options),
+    )
     job = Job(
         id=str(uuid.uuid4()),
+        owner_id=current_user.id,
         source_type="youtube_url",
         # The original URL is retained until the worker has a downloaded local asset.
         source_path=normalized_url,
@@ -231,6 +281,12 @@ def _processing_options_from_form(
     generate_highlights: bool | None = None,
     generate_metadata: bool | None = None,
     generate_subtitles: bool | None = None,
+    context_aware: bool | None = None,
+    output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = None,
+    visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = None,
+    subtitle_style: Literal["standard", "karaoke"] | None = None,
+    hook_text: str | None = None,
+    render_acceleration: Literal["auto", "cpu", "gpu"] | None = None,
 ) -> JobProcessingOptions:
     """Backward-compatible helper used by tests and multipart endpoints."""
     return _processing_options_from_values(
@@ -243,6 +299,12 @@ def _processing_options_from_form(
         generate_highlights,
         generate_metadata,
         generate_subtitles,
+        context_aware,
+        output_preset,
+        visual_style,
+        subtitle_style,
+        hook_text,
+        render_acceleration,
     )
 
 
@@ -256,6 +318,12 @@ def _processing_options_from_values(
     generate_highlights: bool | None = None,
     generate_metadata: bool | None = None,
     generate_subtitles: bool | None = None,
+    context_aware: bool | None = None,
+    output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = None,
+    visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = None,
+    subtitle_style: Literal["standard", "karaoke"] | None = None,
+    hook_text: str | None = None,
+    render_acceleration: Literal["auto", "cpu", "gpu"] | None = None,
 ) -> JobProcessingOptions:
     defaults = default_processing_options().model_dump()
     try:
@@ -297,6 +365,24 @@ def _processing_options_from_values(
                     generate_subtitles
                     if generate_subtitles is not None
                     else defaults["generate_subtitles"]
+                ),
+                "context_aware": (
+                    context_aware if context_aware is not None else defaults["context_aware"]
+                ),
+                "output_preset": (
+                    output_preset if output_preset is not None else defaults["output_preset"]
+                ),
+                "visual_style": (
+                    visual_style if visual_style is not None else defaults["visual_style"]
+                ),
+                "subtitle_style": (
+                    subtitle_style if subtitle_style is not None else defaults["subtitle_style"]
+                ),
+                "hook_text": hook_text if hook_text is not None else defaults["hook_text"],
+                "render_acceleration": (
+                    render_acceleration
+                    if render_acceleration is not None
+                    else defaults["render_acceleration"]
                 ),
             }
         )

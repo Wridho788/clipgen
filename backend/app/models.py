@@ -5,13 +5,14 @@ import json
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import Column, String, Float, Integer, Text, ForeignKey, DateTime
+from sqlalchemy import Column, String, Float, Integer, Text, ForeignKey, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
 
 STAGE_ORDER = (
     "downloading",
+    "analyzing_intro",
     "extracting",
     "transcribing",
     "detecting",
@@ -30,6 +31,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(String, primary_key=True, default=gen_uuid)
+    owner_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     source_type = Column(String, nullable=False)  # "upload" | "youtube_url"
     source_path = Column(String, nullable=False)
     source_name = Column(String, nullable=True)
@@ -45,13 +47,16 @@ class Job(Base):
     transcript_json = Column(Text, nullable=True)
     stage_metrics_json = Column(Text, nullable=True)
     stage_estimates_json = Column(Text, nullable=True)
+    automatic_summary_json = Column(Text, nullable=True)
     processing_started_at = Column(DateTime, nullable=True)
     stage_started_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    owner = relationship("User", back_populates="jobs")
     clips = relationship("Clip", back_populates="job", cascade="all, delete-orphan")
 
     @property
@@ -61,6 +66,10 @@ class Job(Base):
     @property
     def stage_estimates(self) -> dict[str, float]:
         return _json_number_map(self.stage_estimates_json)
+
+    @property
+    def automatic_summary(self) -> dict[str, object]:
+        return _json_object_map(self.automatic_summary_json)
 
     @property
     def estimated_total_seconds(self) -> float:
@@ -76,6 +85,13 @@ class Job(Base):
                     return round(estimate, 1)
             return 0.0
         return round(self._remaining_for_stage(self.status, is_current=True), 1)
+
+    @property
+    def current_stage_elapsed_seconds(self) -> float:
+        """Expose the live stage elapsed time for honest job monitoring."""
+        if self.status in {"pending", "done", "failed", "cancelled"}:
+            return 0.0
+        return round(_elapsed_seconds(self.stage_started_at), 1)
 
     @property
     def overall_eta_seconds(self) -> float:
@@ -136,6 +152,37 @@ class Clip(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     job = relationship("Job", back_populates="clips")
+    feedback = relationship("ClipFeedback", back_populates="clip", cascade="all, delete-orphan")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    username = Column(String, nullable=False, unique=True, index=True)
+    display_name = Column(String, nullable=False)
+    password_hash = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    jobs = relationship("Job", back_populates="owner")
+    feedback = relationship("ClipFeedback", back_populates="user", cascade="all, delete-orphan")
+
+
+class ClipFeedback(Base):
+    __tablename__ = "clip_feedback"
+    __table_args__ = (UniqueConstraint("clip_id", "user_id", name="uq_clip_feedback_user"),)
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    clip_id = Column(String, ForeignKey("clips.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    rating = Column(Integer, nullable=False)  # -1 irrelevant, 1 useful
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    clip = relationship("Clip", back_populates="feedback")
+    user = relationship("User", back_populates="feedback")
 
 
 def _json_number_map(raw_value: str | None) -> dict[str, float]:
@@ -153,6 +200,14 @@ def _json_number_map(raw_value: str | None) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _json_object_map(raw_value: str | None) -> dict[str, object]:
+    try:
+        parsed = json.loads(raw_value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _elapsed_seconds(started_at: datetime | None) -> float:

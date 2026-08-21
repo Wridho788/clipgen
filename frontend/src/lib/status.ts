@@ -9,6 +9,7 @@ export const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
 export const ACTIVE_JOB_STATUSES = new Set<JobStatus>([
   "pending",
   "downloading",
+  "analyzing_intro",
   "extracting",
   "transcribing",
   "detecting",
@@ -21,12 +22,13 @@ export const ACTIVE_JOB_STATUSES = new Set<JobStatus>([
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   pending: "Menunggu",
   downloading: "Mengunduh YouTube",
+  analyzing_intro: "Analisis intro video",
   extracting: "Ekstrak audio",
   transcribing: "Transkripsi",
   detecting: "Deteksi highlight",
   cutting: "Potong klip",
-  cropping: "Crop vertical",
-  subtitling: "Subtitle",
+  cropping: "Reframe & style",
+  subtitling: "Subtitle & hook",
   generating_metadata: "Metadata",
   done: "Selesai",
   failed: "Gagal",
@@ -36,6 +38,7 @@ export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
 export const JOB_STATUS_TONES: Record<JobStatus, string> = {
   pending: "border-slate-200 bg-slate-50 text-slate-700",
   downloading: "border-sky-200 bg-sky-50 text-sky-700",
+  analyzing_intro: "border-violet-200 bg-violet-50 text-violet-700",
   extracting: "border-blue-200 bg-blue-50 text-blue-700",
   transcribing: "border-cyan-200 bg-cyan-50 text-cyan-700",
   detecting: "border-amber-200 bg-amber-50 text-amber-700",

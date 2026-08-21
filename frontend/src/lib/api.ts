@@ -1,4 +1,8 @@
 import {
+  AuthConfigResponse,
+  AuthSessionResponse,
+  AuthUser,
+  ClipFeedbackResponse,
   ClipResponse,
   ClipUpdateRequest,
   JobProcessingOptions,
@@ -8,9 +12,12 @@ import {
   ProcessingEstimateResponse,
   ReleaseInfoResponse,
   SystemMetricsResponse,
+  StorageClearMode,
+  StorageClearResponse,
 } from "@/types/api";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const ACCESS_TOKEN_KEY = "clipgen-access-token";
 
 export interface UploadProgress {
   loaded: number;
@@ -48,6 +55,25 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json();
 }
 
+function getAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = getAccessToken();
+  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+}
+
+function withAccessToken(url: string): string {
+  const token = getAccessToken();
+  if (!token) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}access_token=${encodeURIComponent(token)}`;
+}
+
 export const api = {
   // --- Videos ---
   uploadVideo: async (
@@ -68,7 +94,7 @@ export const api = {
     const formData = new FormData();
     formData.append("url", url);
     appendProcessingOptions(formData, options);
-    const response = await fetch(`${API_BASE_URL}/api/videos/youtube`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/videos/youtube`, {
       method: "POST",
       body: formData,
     });
@@ -93,13 +119,19 @@ export const api = {
     if (options?.generate_highlights !== undefined) params.set("generate_highlights", String(options.generate_highlights));
     if (options?.generate_metadata !== undefined) params.set("generate_metadata", String(options.generate_metadata));
     if (options?.generate_subtitles !== undefined) params.set("generate_subtitles", String(options.generate_subtitles));
-    const response = await fetch(`${API_BASE_URL}/api/videos/estimate?${params.toString()}`);
+    if (options?.context_aware !== undefined) params.set("context_aware", String(options.context_aware));
+    if (options?.output_preset) params.set("output_preset", options.output_preset);
+    if (options?.visual_style) params.set("visual_style", options.visual_style);
+    if (options?.subtitle_style) params.set("subtitle_style", options.subtitle_style);
+    if (options?.hook_text) params.set("hook_text", options.hook_text);
+    if (options?.render_acceleration) params.set("render_acceleration", options.render_acceleration);
+    const response = await apiFetch(`${API_BASE_URL}/api/videos/estimate?${params.toString()}`);
     return handleResponse(response);
   },
 
   // --- Jobs ---
   getJobStatus: async (jobId: string): Promise<JobResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`);
+    const response = await apiFetch(`${API_BASE_URL}/api/jobs/${jobId}`);
     return handleResponse(response);
   },
 
@@ -107,12 +139,12 @@ export const api = {
     const url = status
       ? `${API_BASE_URL}/api/jobs?status=${encodeURIComponent(status)}`
       : `${API_BASE_URL}/api/jobs`;
-    const response = await fetch(url);
+    const response = await apiFetch(url);
     return handleResponse(response);
   },
 
   cancelJob: async (jobId: string): Promise<{ status: string; job_id: string }> => {
-    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/cancel`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/jobs/${jobId}/cancel`, {
       method: "POST",
     });
     return handleResponse(response);
@@ -122,7 +154,7 @@ export const api = {
     jobId: string,
     processingOptions?: JobProcessingOptions,
   ): Promise<JobCreateResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/retry`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/jobs/${jobId}/retry`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(processingOptions ? { processing_options: processingOptions } : {}),
@@ -132,17 +164,17 @@ export const api = {
 
   // --- Clips ---
   getClipsByJob: async (jobId: string): Promise<ClipResponse[]> => {
-    const response = await fetch(`${API_BASE_URL}/api/clips/job/${jobId}`);
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/job/${jobId}`);
     return handleResponse(response);
   },
 
   getClip: async (clipId: string): Promise<ClipResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/clips/${clipId}`);
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}`);
     return handleResponse(response);
   },
 
   updateClip: async (clipId: string, data: ClipUpdateRequest): Promise<ClipResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/clips/${clipId}`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -151,36 +183,115 @@ export const api = {
   },
 
   regenerateClipMetadata: async (clipId: string): Promise<ClipResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/clips/${clipId}/regenerate-metadata`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/regenerate-metadata`, {
       method: "POST",
     });
     return handleResponse(response);
   },
 
   deleteClip: async (clipId: string): Promise<void> => {
-    const response = await fetch(`${API_BASE_URL}/api/clips/${clipId}`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}`, {
       method: "DELETE",
     });
     await handleResponse(response);
   },
 
   getClipPreviewUrl: (clipId: string): string =>
-    `${API_BASE_URL}/api/clips/${clipId}/preview`,
+    withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/preview`),
 
   getClipDownloadUrl: (clipId: string): string =>
-    `${API_BASE_URL}/api/clips/${clipId}/file`,
+    withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/file`),
 
   getJobArchiveUrl: (jobId: string): string =>
-    `${API_BASE_URL}/api/clips/job/${jobId}/archive`,
+    withAccessToken(`${API_BASE_URL}/api/clips/job/${jobId}/archive`),
 
   getSystemMetrics: async (): Promise<SystemMetricsResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/system/metrics`);
+    const response = await apiFetch(`${API_BASE_URL}/api/system/metrics`);
+    return handleResponse(response);
+  },
+
+  clearStorage: async (mode: StorageClearMode): Promise<StorageClearResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/system/storage/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        confirmation: mode === "permanent" ? "DELETE_PERMANENTLY" : undefined,
+      }),
+    });
     return handleResponse(response);
   },
 
   getReleaseInfo: async (): Promise<ReleaseInfoResponse> => {
-    const response = await fetch(`${API_BASE_URL}/api/system/release`);
+    const response = await apiFetch(`${API_BASE_URL}/api/system/release`);
     return handleResponse(response);
+  },
+
+  getClipFeedback: async (clipId: string): Promise<ClipFeedbackResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/feedback`);
+    return handleResponse(response);
+  },
+
+  rateClip: async (
+    clipId: string,
+    rating: -1 | 1,
+    reason?: string,
+  ): Promise<ClipFeedbackResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/feedback`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, reason: reason || undefined }),
+    });
+    return handleResponse(response);
+  },
+
+  trimClip: async (clipId: string, startTime: number, endTime: number): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/trim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_time: startTime, end_time: endTime }),
+    });
+    return handleResponse(response);
+  },
+
+  getAuthConfig: async (): Promise<AuthConfigResponse> => {
+    const response = await fetch(`${API_BASE_URL}/api/auth/config`);
+    return handleResponse(response);
+  },
+
+  login: async (username: string, password: string): Promise<AuthSessionResponse> => {
+    const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const session = await handleResponse<AuthSessionResponse>(response);
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
+    return session;
+  },
+
+  register: async (
+    displayName: string,
+    username: string,
+    password: string,
+  ): Promise<AuthSessionResponse> => {
+    const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: displayName, username, password }),
+    });
+    const session = await handleResponse<AuthSessionResponse>(response);
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
+    return session;
+  },
+
+  getCurrentUser: async (): Promise<AuthUser> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/auth/me`);
+    return handleResponse(response);
+  },
+
+  logout: () => {
+    if (typeof window !== "undefined") window.localStorage.removeItem(ACCESS_TOKEN_KEY);
   },
 };
 
@@ -212,6 +323,14 @@ function appendProcessingOptions(formData: FormData, options?: Partial<JobProces
   if (options?.generate_subtitles !== undefined) {
     formData.append("generate_subtitles", String(options.generate_subtitles));
   }
+  if (options?.context_aware !== undefined) {
+    formData.append("context_aware", String(options.context_aware));
+  }
+  if (options?.output_preset) formData.append("output_preset", options.output_preset);
+  if (options?.visual_style) formData.append("visual_style", options.visual_style);
+  if (options?.subtitle_style) formData.append("subtitle_style", options.subtitle_style);
+  if (options?.hook_text) formData.append("hook_text", options.hook_text);
+  if (options?.render_acceleration) formData.append("render_acceleration", options.render_acceleration);
 }
 
 function uploadWithProgress(
@@ -223,6 +342,8 @@ function uploadWithProgress(
     const request = new XMLHttpRequest();
     request.open("POST", url);
     request.responseType = "text";
+    const token = getAccessToken();
+    if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
 
     request.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;

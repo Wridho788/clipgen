@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   Captions,
-  Crop,
+  AlertTriangle,
   FileVideo,
   Languages,
   Link as LinkIcon,
@@ -28,14 +28,25 @@ const VIDEO_FILE_NAME = /\.(mp4|mkv|avi|mov|webm|m4v)$/i;
 type YoutubeProcessingMode = "automatic" | "manual";
 type ManualYoutubeOptions = Pick<
   JobProcessingOptions,
-  "crop_vertical" | "generate_highlights" | "generate_metadata" | "generate_subtitles"
+  "generate_highlights" | "generate_metadata" | "generate_subtitles"
+>;
+type RenderOptions = Pick<
+  JobProcessingOptions,
+  "context_aware" | "output_preset" | "visual_style" | "subtitle_style" | "hook_text"
 >;
 
 const DEFAULT_MANUAL_YOUTUBE_OPTIONS: ManualYoutubeOptions = {
-  crop_vertical: false,
   generate_highlights: true,
   generate_metadata: true,
   generate_subtitles: true,
+};
+
+const DEFAULT_RENDER_OPTIONS: RenderOptions = {
+  context_aware: true,
+  output_preset: "tiktok",
+  visual_style: "blur",
+  subtitle_style: "karaoke",
+  hook_text: null,
 };
 
 export function VideoUpload() {
@@ -45,9 +56,11 @@ export function VideoUpload() {
   const [mode, setMode] = useState<"file" | "youtube">("file");
   const [metadataLanguage, setMetadataLanguage] = useState<"id" | "en">("id");
   const [youtubeProcessingMode, setYoutubeProcessingMode] = useState<YoutubeProcessingMode>("automatic");
+  const [automaticGenerateHighlights, setAutomaticGenerateHighlights] = useState(true);
   const [manualYoutubeOptions, setManualYoutubeOptions] = useState<ManualYoutubeOptions>(
     DEFAULT_MANUAL_YOUTUBE_OPTIONS
   );
+  const [renderOptions, setRenderOptions] = useState<RenderOptions>(DEFAULT_RENDER_OPTIONS);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -63,18 +76,20 @@ export function VideoUpload() {
     crop_vertical: false,
     generate_highlights: true,
     generate_metadata: true,
-    generate_subtitles: false,
+    generate_subtitles: true,
+    ...renderOptions,
   } satisfies Partial<JobProcessingOptions>;
 
   const youtubeProcessingOptions = {
     metadata_language: metadataLanguage,
     processing_mode: youtubeProcessingMode,
+    crop_vertical: false,
+    ...renderOptions,
     ...(youtubeProcessingMode === "automatic"
       ? {
-          crop_vertical: false,
-          generate_highlights: true,
+          generate_highlights: automaticGenerateHighlights,
           generate_metadata: true,
-          generate_subtitles: false,
+          generate_subtitles: true,
         }
       : manualYoutubeOptions),
   } satisfies Partial<JobProcessingOptions>;
@@ -234,6 +249,77 @@ export function VideoUpload() {
           )}
         </div>
 
+        <section className="space-y-3 border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Workflow short-form</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Deteksi momen → format sosial → caption → render batch.</p>
+            </div>
+            <ModePill icon={<Sparkles className="h-4 w-4" />} label="Context-aware" active={renderOptions.context_aware} />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              Format export
+              <select
+                value={renderOptions.output_preset}
+                disabled={uploading}
+                onChange={(event) => setRenderOptions((current) => ({ ...current, output_preset: event.target.value as RenderOptions["output_preset"] }))}
+                className="mt-1 w-full border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-cyan-500 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              >
+                <option value="tiktok">TikTok · 9:16</option>
+                <option value="reels">Instagram Reels · 9:16</option>
+                <option value="youtube_shorts">YouTube Shorts · 9:16</option>
+                <option value="square">Square post · 1:1</option>
+                <option value="landscape">YouTube landscape · 16:9</option>
+                <option value="original">Original aspect</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              Style visual
+              <select
+                value={renderOptions.visual_style}
+                disabled={uploading}
+                onChange={(event) => setRenderOptions((current) => ({ ...current, visual_style: event.target.value as RenderOptions["visual_style"] }))}
+                className="mt-1 w-full border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-cyan-500 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              >
+                <option value="blur">Blur background</option>
+                <option value="crop">Center crop</option>
+                <option value="zoom">Dynamic zoom</option>
+                <option value="split">Split screen</option>
+                <option value="clean">Clean frame</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              Subtitle
+              <select
+                value={renderOptions.subtitle_style}
+                disabled={uploading}
+                onChange={(event) => setRenderOptions((current) => ({ ...current, subtitle_style: event.target.value as RenderOptions["subtitle_style"] }))}
+                className="mt-1 w-full border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-cyan-500 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              >
+                <option value="karaoke">Karaoke + glow per kata</option>
+                <option value="standard">Standard caption</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              Hook overlay (opsional)
+              <input
+                value={renderOptions.hook_text || ""}
+                maxLength={120}
+                disabled={uploading}
+                onChange={(event) => setRenderOptions((current) => ({ ...current, hook_text: event.target.value || null }))}
+                placeholder="Contoh: Jangan skip bagian ini"
+                className="mt-1 w-full border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-cyan-500 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </label>
+            <p className="self-end border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+              Akselerasi otomatis — perangkat aktif tampil di status sistem.
+            </p>
+          </div>
+        </section>
+
         {mode === "file" ? (
           <div
             onDragEnter={() => setDragActive(true)}
@@ -301,23 +387,27 @@ export function VideoUpload() {
                 className="w-full bg-transparent px-3 py-2.5 text-sm text-slate-950 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed dark:text-slate-50 dark:placeholder:text-slate-500"
               />
             </div>
+            <p className="flex items-start gap-2 border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              ClipGen mengunduh dan memproses video penuh. Parameter timestamp YouTube seperti <code>?t=2601</code> tidak membatasi bagian video yang diproses.
+            </p>
 
             {youtubeProcessingMode === "automatic" ? (
               <div className="grid gap-2 sm:grid-cols-4">
-                <ModePill icon={<Zap className="h-4 w-4" />} label="Landscape" active />
-                <ModePill icon={<Scissors className="h-4 w-4" />} label="Lewati intro" active />
-                <ModePill icon={<Sparkles className="h-4 w-4" />} label="Multi-klip" active />
-                <ModePill icon={<Tags className="h-4 w-4" />} label="Metadata on" active />
-              </div>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
+                <ModePill icon={<Zap className="h-4 w-4" />} label="Context-aware" active={automaticGenerateHighlights} />
+                <ModePill icon={<Scissors className="h-4 w-4" />} label="Lewati intro" active={automaticGenerateHighlights} />
+                <ModePill icon={<Sparkles className="h-4 w-4" />} label="Klip adaptif" active={automaticGenerateHighlights} />
+                <ModePill icon={<Captions className="h-4 w-4" />} label="Karaoke + hook" active />
                 <ToggleTile
-                  icon={<Crop className="h-4 w-4" />}
-                  label="Crop vertical"
-                  active={manualYoutubeOptions.crop_vertical}
-                  onClick={() => toggleManualOption("crop_vertical")}
+                  icon={<Sparkles className="h-4 w-4" />}
+                  label="Analisis highlight"
+                  active={automaticGenerateHighlights}
+                  onClick={() => setAutomaticGenerateHighlights((current) => !current)}
                   disabled={uploading}
                 />
+              </div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-3">
                 <ToggleTile
                   icon={<Sparkles className="h-4 w-4" />}
                   label="Generate highlight"

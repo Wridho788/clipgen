@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
+import { AuthGate } from "@/components/AuthGate";
 
 export const metadata: Metadata = {
   title: "ClipGen — Personal AI Video Assistant",
@@ -17,9 +18,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
         <Providers>
-          <div className="clipgen-app min-h-screen">
-            <div className="mx-auto max-w-6xl p-4 sm:p-6">{children}</div>
-          </div>
+          <AuthGate>
+            <div className="clipgen-app min-h-screen">
+              <div className="mx-auto max-w-6xl p-4 sm:p-6">{children}</div>
+            </div>
+          </AuthGate>
         </Providers>
       </body>
     </html>

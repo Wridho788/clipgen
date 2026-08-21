@@ -14,3 +14,8 @@ async def enqueue_job(job_id: str) -> None:
             await job_service.process()
 
     await job_queue.enqueue(job_id, process_job)
+
+
+async def enqueue_task(task_id: str, process_func) -> None:
+    """Queue a non-job render task without blocking an API request."""
+    await get_job_queue().enqueue(task_id, process_func)

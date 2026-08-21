@@ -14,30 +14,53 @@ def download_youtube_video(
     output_dir: Path,
     job_id: str,
     timeout_seconds: int,
+    concurrent_fragments: int = 4,
+    max_height: int = 720,
+    cookies_path: Path | None = None,
+    user_agent: str | None = None,
 ) -> Path:
     output_template = output_dir / f"{job_id}.%(ext)s"
-    attempts = [None, "youtube:player_client=web_safari"]
+    # A 403 often belongs to one playback client rather than the public video
+    # itself.  Do not use web_safari as the sole fallback: recent YouTube
+    # experiments can return 403 for its stream URLs.  The variants below use
+    # only documented yt-dlp clients and progressively reduce request pressure.
+    attempts = [
+        ("default", None, concurrent_fragments),
+        ("web_without_visionos", "youtube:player_client=default,-visionos", concurrent_fragments),
+        ("web_embedded", "youtube:player_client=web_embedded,web", 1),
+    ]
     errors = []
+    format_selector = _build_format_selector(max_height)
+    cookie_file = _usable_cookie_file(cookies_path)
 
-    for extractor_args in attempts:
+    for attempt_name, extractor_args, attempt_fragments in attempts:
         cmd = [
             "yt-dlp",
             "--no-playlist",
             "--no-progress",
             "--retries", "3",
             "--fragment-retries", "3",
+            "--concurrent-fragments", str(attempt_fragments),
+            "--http-chunk-size", "10M",
             "--merge-output-format", "mp4",
             "--write-info-json",
             "--print", "after_move:filepath",
             "--js-runtimes", "deno",
-            "-f", "bv*+ba/b",
+            "-f", format_selector,
             "-o", str(output_template),
         ]
         if extractor_args:
             cmd.extend(["--extractor-args", extractor_args])
+        if cookie_file:
+            cmd.extend(["--cookies", str(cookie_file)])
+        if user_agent and user_agent.strip():
+            cmd.extend(["--user-agent", user_agent.strip()])
         cmd.append(url)
 
-        logger.info(f"YouTube download attempt for job {job_id}, fallback={bool(extractor_args)}")
+        logger.info(
+            f"YouTube download attempt for job {job_id}, client={attempt_name}, "
+            f"fragments={attempt_fragments}, cookies={bool(cookie_file)}"
+        )
         try:
             result = subprocess.run(
                 cmd,
@@ -65,7 +88,14 @@ def download_youtube_video(
 
     _delete_partial_downloads(output_dir, job_id)
     last_error = errors[-1] if errors else "Tidak ada detail dari yt-dlp"
-    raise YouTubeDownloadError(_friendly_error(last_error))
+    raise YouTubeDownloadError(_friendly_error(last_error, bool(cookie_file)))
+
+
+def _build_format_selector(max_height: int) -> str:
+    """Prefer a smaller rendition when configured, otherwise use best quality."""
+    if max_height <= 0:
+        return "bv*+ba/b"
+    return f"bv*[height<={max_height}]+ba/b[height<={max_height}]"
 
 
 def _find_downloaded_path(stdout: str, output_dir: Path, job_id: str) -> Path | None:
@@ -86,6 +116,7 @@ def _should_retry_with_fallback(detail: str) -> bool:
     return any(
         indicator in normalized
         for indicator in (
+            "http error 403",
             "precondition check failed",
             "http error 400",
             "requested format is not available",
@@ -96,8 +127,21 @@ def _should_retry_with_fallback(detail: str) -> bool:
     )
 
 
-def _friendly_error(detail: str) -> str:
+def _friendly_error(detail: str, used_cookies: bool = False) -> str:
     normalized = detail.lower()
+    if "http error 403" in normalized:
+        follow_up = (
+            "Cookie browser sudah dipakai; buka video tersebut di browser pada jaringan yang sama, "
+            "refresh/verifikasi bila diminta, lalu export ulang cookie."
+            if used_cookies
+            else "Jika Retry masih gagal, gunakan cookies.txt browser yang fresh dari jaringan yang sama "
+            "melalui YOUTUBE_COOKIES_PATH."
+        )
+        return (
+            "YouTube menolak stream video (HTTP 403) setelah ClipGen mencoba beberapa playback client. "
+            "Ini bukan masalah bandwidth. "
+            f"{follow_up}"
+        )
     if "precondition check failed" in normalized or "http error 400" in normalized:
         return (
             "YouTube menolak permintaan download saat ini. Coba ulangi beberapa saat lagi, "
@@ -106,6 +150,15 @@ def _friendly_error(detail: str) -> str:
     if "js runtime" in normalized or "challenge solving failed" in normalized:
         return "Komponen challenge YouTube belum siap di server. Hubungi administrator untuk memperbarui runtime YouTube."
     return f"YouTube download gagal: {detail[:300]}"
+
+
+def _usable_cookie_file(cookies_path: Path | None) -> Path | None:
+    if cookies_path is None:
+        return None
+    if cookies_path.is_file():
+        return cookies_path
+    logger.warning(f"YouTube cookies path tidak ditemukan, melanjutkan tanpa cookies: {cookies_path}")
+    return None
 
 
 def _delete_partial_downloads(output_dir: Path, job_id: str) -> None:

@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.routes import system
-from app.models import Base, Clip, Job
+from app.models import Base, Clip, Job, User
 
 
 def _session(tmp_path):
@@ -34,11 +34,13 @@ async def test_metrics_contract_includes_queue_counts_and_storage(monkeypatch, t
 
     Session = _session(tmp_path)
     with Session() as db:
-        db.add(Job(id="job-1", source_type="upload", source_path="/tmp/source.mp4", status="done"))
-        db.add(Clip(id="clip-1", job_id="job-1", start_time=0, end_time=10, highlight_score=1, status="ready"))
+        user = User(id="user-1", username="tester", display_name="Tester")
+        db.add(user)
+        db.add(Job(id="job-1", owner_id=user.id, source_type="upload", source_path=str(upload_dir / "source.mp4"), status="done"))
+        db.add(Clip(id="clip-1", job_id="job-1", start_time=0, end_time=10, highlight_score=1, file_path=str(clips_dir / "clip.mp4"), status="ready"))
         db.commit()
 
-        response = await system.get_metrics(db)
+        response = await system.get_metrics(db, user)
 
     assert response["queue"]["queue_size"] >= 0
     assert "worker_running" in response["queue"]
@@ -53,9 +55,12 @@ async def test_performance_baseline_contract_summarizes_completed_jobs(tmp_path)
     started_at = datetime.utcnow() - timedelta(seconds=90)
     completed_at = datetime.utcnow()
     with Session() as db:
+        user = User(id="user-1", username="tester", display_name="Tester")
+        db.add(user)
         db.add(
             Job(
                 id="job-1",
+                owner_id=user.id,
                 source_type="youtube_url",
                 source_path="https://youtube.com/watch?v=test",
                 source_duration_seconds=120,
@@ -68,18 +73,28 @@ async def test_performance_baseline_contract_summarizes_completed_jobs(tmp_path)
         )
         db.commit()
 
-        response = await system.get_performance_baseline(limit=10, db=db)
+        response = await system.get_performance_baseline(limit=10, db=db, current_user=user)
 
     assert response["jobs_analyzed"] == 1
     assert response["total_processing_seconds"]["count"] == 1
     assert response["source_duration_seconds"]["avg"] == 120
     assert response["stage_seconds"]["downloading"]["avg"] == 12.5
     assert response["latest_jobs"][0]["id"] == "job-1"
+    assert response["profiles"][0]["profile"].startswith("youtube_url")
+    assert "runtime_current" in response
 
 
 @pytest.mark.asyncio
 async def test_release_info_contract(monkeypatch):
     monkeypatch.setattr(system.settings, "app_version", "1.0.0")
+    monkeypatch.setattr(
+        system,
+        "get_runtime_capabilities",
+        lambda: type("Capabilities", (), {
+            "nvenc_runtime_usable": False,
+            "as_dict": lambda self: {"label": "CPU", "gpu_compatible": False},
+        })(),
+    )
 
     response = await system.get_release_info()
 
@@ -88,6 +103,10 @@ async def test_release_info_contract(monkeypatch):
     assert response["release_channel"] == "local-mvp"
     assert response["features"]["vertical_crop"] is True
     assert response["features"]["youtube_manual_options"] is True
-    assert response["features"]["upload_subtitles"] is False
+    assert response["features"]["upload_subtitles"] is True
     assert response["features"]["youtube_subtitles"] is True
+    assert response["features"]["context_aware_clipping"] is True
+    assert response["features"]["gpu_render_fallback"] is True
+    assert response["acceleration"]["label"] == "CPU"
+    assert response["rendering"]["nvenc_available"] is False
     assert response["known_risks"]

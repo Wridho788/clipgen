@@ -11,7 +11,9 @@ export function JobProgressBar({ job }: { job: JobResponse }) {
   const isCancelled = job.status === "cancelled";
   const elapsedSinceSnapshot = Math.max(0, (now - snapshotAt) / 1000);
   const currentStageEta = Math.max(0, job.current_stage_eta_seconds - elapsedSinceSnapshot);
+  const currentStageElapsed = Math.max(0, job.current_stage_elapsed_seconds + elapsedSinceSnapshot);
   const overallEta = Math.max(0, job.overall_eta_seconds - elapsedSinceSnapshot);
+  const activityAt = job.heartbeat_at || job.updated_at;
 
   useEffect(() => {
     setSnapshotAt(Date.now());
@@ -52,6 +54,14 @@ export function JobProgressBar({ job }: { job: JobResponse }) {
           <p className="text-slate-600 dark:text-slate-300 sm:text-right">
             Estimasi total: <span className="font-medium text-slate-950 dark:text-slate-50">{formatEta(overallEta)}</span>
           </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 sm:col-span-2">
+            Tahap berjalan {formatTimeEstimate(currentStageElapsed)} · Akselerasi otomatis: {job.runtime?.label || "memeriksa"}
+          </p>
+          {activityAt && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 sm:col-span-2">
+              Worker aktif terakhir: {new Date(activityAt).toLocaleTimeString("id-ID")}
+            </p>
+          )}
         </div>
       )}
 

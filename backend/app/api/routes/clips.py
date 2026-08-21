@@ -14,14 +14,25 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.security import get_current_user
 from app.database import get_db
-from app.models import Clip, Job
+from app.models import Clip, ClipFeedback, Job, User
 from app.core.pipeline.metadata_gen import generate_metadata
-from app.schemas import ClipResponse, ClipUpdateRequest
+from app.schemas import (
+    ClipFeedbackRequest,
+    ClipFeedbackResponse,
+    ClipResponse,
+    ClipTrimRequest,
+    ClipUpdateRequest,
+)
 from loguru import logger
+from app.services.clip_render_service import enqueue_clip_trim
+from app.services.distribution_metadata import build_distribution_pack
+from app.services.source_metadata import load_youtube_reference_hashtags
 
 router = APIRouter()
 
@@ -30,21 +41,22 @@ router = APIRouter()
 async def list_clips_by_job(
     job_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """List semua clip dari satu job."""
+    job = _get_owned_job(db, job_id, current_user)
     clips = db.query(Clip).filter(Clip.job_id == job_id).order_by(Clip.created_at).all()
-    return clips
+    return [_clip_response(clip, job) for clip in clips]
 
 
 @router.get("/job/{job_id}/archive")
 async def download_job_archive(
     job_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Build a ZIP with all ready clips from a job for one-click export."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    job = _get_owned_job(db, job_id, current_user)
 
     clips = (
         db.query(Clip)
@@ -73,12 +85,11 @@ async def download_job_archive(
 async def get_clip(
     clip_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Get clip detail."""
-    clip = db.query(Clip).filter(Clip.id == clip_id).first()
-    if not clip:
-        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
-    return clip
+    clip = _get_owned_clip(db, clip_id, current_user)
+    return _clip_response(clip)
 
 
 @router.patch("/{clip_id}", response_model=ClipResponse)
@@ -86,14 +97,13 @@ async def update_clip(
     clip_id: str,
     data: ClipUpdateRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Update metadata clip (title, caption, hashtags).
     User bisa override hasil AI generation.
     """
-    clip = db.query(Clip).filter(Clip.id == clip_id).first()
-    if not clip:
-        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
+    clip = _get_owned_clip(db, clip_id, current_user)
 
     if data.title is not None:
         clip.title = data.title
@@ -104,18 +114,17 @@ async def update_clip(
 
     db.commit()
     logger.info(f"Clip {clip_id} updated")
-    return clip
+    return _clip_response(clip)
 
 
 @router.post("/{clip_id}/regenerate-metadata", response_model=ClipResponse)
 async def regenerate_clip_metadata(
     clip_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Regenerate title, caption, and hashtags from the stored job transcript."""
-    clip = db.query(Clip).filter(Clip.id == clip_id).first()
-    if not clip:
-        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
+    clip = _get_owned_clip(db, clip_id, current_user)
     if clip.status != "ready":
         raise HTTPException(status_code=409, detail="Metadata hanya bisa dibuat ulang untuk clip yang siap")
 
@@ -127,10 +136,16 @@ async def regenerate_clip_metadata(
             detail="Transkrip job tidak tersedia untuk membuat metadata ulang.",
         )
 
+    reference_hashtags = (
+        load_youtube_reference_hashtags(job.source_path)
+        if job and job.source_type == "youtube_url"
+        else []
+    )
     metadata = await asyncio.to_thread(
         generate_metadata,
         transcript_text,
         _metadata_language_for_job(job),
+        reference_hashtags,
     )
     clip.title = metadata.get("title")
     clip.caption = metadata.get("caption")
@@ -140,20 +155,19 @@ async def regenerate_clip_metadata(
     db.commit()
     db.refresh(clip)
     logger.info(f"Clip {clip_id} metadata regenerated")
-    return clip
+    return _clip_response(clip, job)
 
 
 @router.delete("/{clip_id}")
 async def delete_clip(
     clip_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Delete clip (dan file videonya).
     """
-    clip = db.query(Clip).filter(Clip.id == clip_id).first()
-    if not clip:
-        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
+    clip = _get_owned_clip(db, clip_id, current_user)
 
     # Delete file
     if clip.file_path:
@@ -176,6 +190,7 @@ async def delete_clip(
 async def download_clip(
     clip_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Download clip video file.
@@ -183,9 +198,7 @@ async def download_clip(
     Return: MP4 file sebagai binary stream.
     Browser akan trigger download atau bisa juga embed di <video> tag.
     """
-    clip = db.query(Clip).filter(Clip.id == clip_id).first()
-    if not clip:
-        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
+    clip = _get_owned_clip(db, clip_id, current_user)
 
     if not clip.file_path:
         raise HTTPException(status_code=400, detail="Clip belum siap (file_path kosong)")
@@ -210,6 +223,7 @@ async def download_clip(
 async def preview_clip(
     clip_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Stream clip untuk preview di web player.
@@ -217,9 +231,7 @@ async def preview_clip(
     
     (FastAPI + Starlette automatically handle streaming + range requests)
     """
-    clip = db.query(Clip).filter(Clip.id == clip_id).first()
-    if not clip:
-        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
+    clip = _get_owned_clip(db, clip_id, current_user)
 
     if not clip.file_path:
         raise HTTPException(status_code=400, detail="Clip belum siap (file_path kosong)")
@@ -233,6 +245,135 @@ async def preview_clip(
         path=file_path,
         media_type="video/mp4",
     )
+
+
+@router.get("/{clip_id}/feedback", response_model=ClipFeedbackResponse)
+async def get_clip_feedback(
+    clip_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    clip = _get_owned_clip(db, clip_id, current_user)
+    current = (
+        db.query(ClipFeedback)
+        .filter(ClipFeedback.clip_id == clip.id, ClipFeedback.user_id == current_user.id)
+        .first()
+    )
+    positive_count, negative_count = _feedback_counts(db, clip.id)
+    return ClipFeedbackResponse(
+        rating=current.rating if current else None,
+        reason=current.reason if current else None,
+        positive_count=positive_count,
+        negative_count=negative_count,
+    )
+
+
+@router.put("/{clip_id}/feedback", response_model=ClipFeedbackResponse)
+async def rate_clip(
+    clip_id: str,
+    data: ClipFeedbackRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Store one quality signal per user so automatic selection can be tuned."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    feedback = (
+        db.query(ClipFeedback)
+        .filter(ClipFeedback.clip_id == clip.id, ClipFeedback.user_id == current_user.id)
+        .first()
+    )
+    if feedback is None:
+        feedback = ClipFeedback(clip_id=clip.id, user_id=current_user.id, rating=data.rating)
+        db.add(feedback)
+    feedback.rating = data.rating
+    feedback.reason = data.reason.strip() if data.reason else None
+    db.commit()
+    positive_count, negative_count = _feedback_counts(db, clip.id)
+    return ClipFeedbackResponse(
+        rating=data.rating,
+        reason=feedback.reason,
+        positive_count=positive_count,
+        negative_count=negative_count,
+    )
+
+
+@router.post("/{clip_id}/trim", response_model=ClipResponse, status_code=202)
+async def trim_clip(
+    clip_id: str,
+    data: ClipTrimRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Queue a re-render for a user-adjusted source range."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    job = _get_owned_job(db, clip.job_id, current_user)
+    if job.source_duration_seconds and data.end_time > job.source_duration_seconds:
+        raise HTTPException(status_code=422, detail="Timestamp akhir melebihi durasi video sumber")
+    if not Path(job.source_path).exists():
+        raise HTTPException(status_code=409, detail="File sumber tidak tersedia untuk membuat trim baru")
+
+    clip.start_time = data.start_time
+    clip.end_time = data.end_time
+    clip.status = "processing"
+    db.commit()
+    db.refresh(clip)
+    await enqueue_clip_trim(clip.id)
+    return _clip_response(clip, job)
+
+
+def _clip_response(clip: Clip, job: Job | None = None) -> ClipResponse:
+    """Expose one copy-ready manual distribution package per clip."""
+    job = job or clip.job
+    try:
+        tags = json.loads(clip.hashtags or "[]")
+    except json.JSONDecodeError:
+        tags = []
+    reference_tags = (
+        load_youtube_reference_hashtags(job.source_path)
+        if job and job.source_type == "youtube_url"
+        else []
+    )
+    return ClipResponse.model_validate(clip).model_copy(
+        update={
+            "distribution": build_distribution_pack(
+                clip.title,
+                clip.caption,
+                tags if isinstance(tags, list) else [],
+                source_reference_hashtags=reference_tags,
+                source_name=job.source_name if job else None,
+            )
+        }
+    )
+
+
+def _get_owned_job(db: Session, job_id: str, current_user: User) -> Job:
+    job = db.query(Job).filter(Job.id == job_id, Job.owner_id == current_user.id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return job
+
+
+def _get_owned_clip(db: Session, clip_id: str, current_user: User) -> Clip:
+    clip = (
+        db.query(Clip)
+        .join(Job, Clip.job_id == Job.id)
+        .filter(Clip.id == clip_id, Job.owner_id == current_user.id)
+        .first()
+    )
+    if clip is None:
+        raise HTTPException(status_code=404, detail=f"Clip {clip_id} not found")
+    return clip
+
+
+def _feedback_counts(db: Session, clip_id: str) -> tuple[int, int]:
+    rows = (
+        db.query(ClipFeedback.rating, func.count(ClipFeedback.id))
+        .filter(ClipFeedback.clip_id == clip_id)
+        .group_by(ClipFeedback.rating)
+        .all()
+    )
+    counts = {int(rating): int(count) for rating, count in rows}
+    return counts.get(1, 0), counts.get(-1, 0)
 
 
 def _safe_download_filename(title: str | None) -> str:

@@ -15,7 +15,9 @@ import {
 import { JobResponse, JobStatus } from "@/types/api";
 import { VideoUpload } from "@/components/VideoUpload";
 import { SystemStatusBar } from "@/components/SystemStatusBar";
+import { StorageClearControl } from "@/components/StorageClearControl";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { AccountControl } from "@/components/AuthGate";
 
 type JobFilter = "all" | "active" | Extract<JobStatus, "done" | "failed" | "cancelled">;
 
@@ -70,6 +72,7 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-wrap gap-2">
           <ThemeToggle />
+          <AccountControl />
           <button
             type="button"
             onClick={() => refetch()}
@@ -83,6 +86,8 @@ export default function Dashboard() {
       </div>
 
       <SystemStatusBar />
+
+      <StorageClearControl />
 
       <VideoUpload />
 

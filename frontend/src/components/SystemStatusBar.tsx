@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Database, HardDrive, Server } from "lucide-react";
+import { Activity, Cpu, Database, HardDrive, Server } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatFileSize } from "@/lib/status";
 
@@ -28,9 +28,13 @@ export function SystemStatusBar() {
     ? metrics.storage_bytes.uploads + metrics.storage_bytes.clips + metrics.storage_bytes.temp
     : 0;
   const workerRunning = metrics?.queue.worker_running;
+  const currentJobId = metrics?.queue.current_job_id;
+  const currentJobLabel = currentJobId ? `Job ${currentJobId.slice(0, 8)}` : "Siap";
+  const queuedLabel = `${metrics?.queue.queue_size ?? 0} siap`;
+  const cancelledQueued = metrics?.queue.cancelled_in_queue ?? 0;
 
   return (
-    <section className="grid gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2 lg:grid-cols-4">
+    <section className="grid gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2 lg:grid-cols-5">
       <StatusItem
         icon={<Server className="h-3.5 w-3.5" />}
         label="Release"
@@ -39,18 +43,24 @@ export function SystemStatusBar() {
       <StatusItem
         icon={<Activity className="h-3.5 w-3.5" />}
         label="Worker"
-        value={workerRunning ? "Aktif" : "Tidak aktif"}
+        value={workerRunning ? currentJobLabel : "Tidak aktif"}
         tone={workerRunning ? "ok" : "warn"}
       />
       <StatusItem
         icon={<Database className="h-3.5 w-3.5" />}
         label="Queue"
-        value={`${metrics?.queue.queue_size ?? 0} antrean`}
+        value={cancelledQueued ? `${queuedLabel} · ${cancelledQueued} batal` : queuedLabel}
       />
       <StatusItem
         icon={<HardDrive className="h-3.5 w-3.5" />}
         label="Storage"
         value={formatFileSize(storageTotal)}
+      />
+      <StatusItem
+        icon={<Cpu className="h-3.5 w-3.5" />}
+        label="Akselerasi"
+        value={release?.acceleration?.label ?? "Memeriksa"}
+        tone={release?.acceleration?.gpu_compatible ? "ok" : "neutral"}
       />
     </section>
   );

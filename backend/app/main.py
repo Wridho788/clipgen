@@ -8,12 +8,14 @@ Lifecycle:
 """
 from contextlib import asynccontextmanager
 import asyncio
+import time
+import uuid
 from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from loguru import logger
 from sqlalchemy import text
 
@@ -23,7 +25,7 @@ from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
 from app.services.maintenance import maintenance_loop
 from app.core.pipeline.metadata_gen import test_ollama_connection
-from app.api.routes import videos, jobs, clips, system
+from app.api.routes import auth, videos, jobs, clips, system
 
 
 _file_logging_configured = False
@@ -40,6 +42,7 @@ def configure_file_logging() -> None:
         retention=f"{settings.log_retention_days} days",
         level=settings.log_level.upper(),
         enqueue=True,
+        serialize=settings.log_json,
     )
     _file_logging_configured = True
 
@@ -60,9 +63,9 @@ async def lifespan(app: FastAPI):
         recovery_report = recover_jobs_after_startup()
         if recovery_report.failed_jobs:
             logger.warning(
-                "Marked "
-                f"{recovery_report.failed_jobs} interrupted jobs and "
-                f"{recovery_report.failed_clips} processing clips as failed"
+                "Recovered "
+                f"{recovery_report.failed_jobs} interrupted jobs, with "
+                f"{len(recovery_report.retry_job_ids)} replacement jobs queued"
             )
     except Exception as e:
         logger.error(f"❌ Database init failed: {e}")
@@ -89,6 +92,8 @@ async def lifespan(app: FastAPI):
             "Requeued "
             f"{len(recovery_report.pending_job_ids)} pending jobs after startup"
         )
+    for job_id in recovery_report.retry_job_ids:
+        await enqueue_job(job_id)
     maintenance_task = asyncio.create_task(maintenance_loop())
     app.state.maintenance_task = maintenance_task
     logger.info("✅ Maintenance worker started")
@@ -115,6 +120,30 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Attach a request id to logs and responses without logging sensitive bodies."""
+
+    async def dispatch(self, request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        started_at = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.bind(request_id=request_id, method=request.method, path=request.url.path).exception(
+                "Request failed"
+            )
+            raise
+        response.headers["X-Request-ID"] = request_id
+        logger.bind(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            duration_ms=round((time.perf_counter() - started_at) * 1000, 1),
+        ).info("HTTP request completed")
+        return response
+
 # --- CORS untuk frontend local dev ---
 app.add_middleware(
     CORSMiddleware,
@@ -123,12 +152,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# --- Static file serving untuk video clips ---
-# /files/clips/xxx.mp4 → serve dari storage/clips/
-app.mount("/files/clips", StaticFiles(directory=settings.clips_dir), name="clips")
+app.add_middleware(RequestLoggingMiddleware)
 
 # --- Include routers ---
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
