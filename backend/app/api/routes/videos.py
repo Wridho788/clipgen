@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.errors import ErrorCode, PipelineError
 from app.core.security import get_current_user
 from app.core.pipeline.audio_extract import has_audio_stream
 from app.database import get_db
@@ -32,6 +33,9 @@ from app.services.processing_estimator import build_stage_estimates, total_estim
 from app.services.youtube_access import YouTubeAccessBlocked, get_youtube_access_status, require_youtube_access
 
 router = APIRouter()
+
+# Containers FFmpeg reliably demuxes and browsers can usually preview.
+SUPPORTED_UPLOAD_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm"}
 
 
 @router.get("/estimate", response_model=ProcessingEstimateResponse)
@@ -81,6 +85,7 @@ async def upload_video(
     processing_mode: Literal["automatic", "manual"] | None = Form(None),
     crop_vertical: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
+    burn_captions: bool | None = Form(None),
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Form(None),
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
@@ -97,13 +102,16 @@ async def upload_video(
         processing_mode=processing_mode,
         crop_vertical=crop_vertical,
         generate_metadata=generate_metadata,
+        burn_captions=burn_captions,
         output_preset=output_preset,
         visual_style=visual_style,
         render_acceleration=render_acceleration,
         campaign_brief_json=campaign_brief_json,
     )
     job_id = str(uuid.uuid4())
-    file_ext = Path(file.filename).suffix if file.filename else ".mp4"
+    file_ext = (Path(file.filename).suffix if file.filename else ".mp4").lower() or ".mp4"
+    if file_ext not in SUPPORTED_UPLOAD_EXTENSIONS:
+        raise PipelineError(ErrorCode.SOURCE_UNSUPPORTED)
     saved_path = settings.upload_dir / f"{job_id}{file_ext}"
     max_size_bytes = settings.max_upload_size_mb * 1024 * 1024
 
@@ -113,12 +121,12 @@ async def upload_video(
             while chunk := await file.read(1024 * 1024):
                 bytes_written += len(chunk)
                 if bytes_written > max_size_bytes:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File terlalu besar. Max: {settings.max_upload_size_mb}MB",
+                    raise PipelineError(
+                        ErrorCode.SOURCE_TOO_LARGE,
+                        message=f"File terlalu besar. Max: {settings.max_upload_size_mb}MB",
                     )
                 output_file.write(chunk)
-    except HTTPException:
+    except (HTTPException, PipelineError):
         saved_path.unlink(missing_ok=True)
         raise
     except Exception as error:
@@ -131,18 +139,18 @@ async def upload_video(
         # event loop so health checks and other requests can still complete.
         video_info = await asyncio.to_thread(probe_video, saved_path)
         if not video_info:
-            raise HTTPException(status_code=400, detail="File bukan video valid atau corrupt")
+            raise PipelineError(ErrorCode.SOURCE_CORRUPT)
         if processing_options.generate_metadata and not await asyncio.to_thread(has_audio_stream, saved_path):
-            raise HTTPException(
-                status_code=400,
-                detail="Video tidak punya audio track. Upload video dengan suara/speech agar bisa diproses.",
+            raise PipelineError(
+                ErrorCode.AUDIO_MISSING,
+                message="Video tidak punya audio track. Upload video dengan suara/speech agar bisa diproses.",
             )
     except subprocess.TimeoutExpired as error:
         saved_path.unlink(missing_ok=True)
         logger.warning("Upload media probe timed out for {}", saved_path.name)
-        raise HTTPException(
-            status_code=504,
-            detail=(
+        raise PipelineError(
+            ErrorCode.SOURCE_PROBE_TIMEOUT,
+            message=(
                 "File sudah diterima, tetapi pemeriksaan video/audio melewati batas waktu "
                 f"{settings.media_probe_timeout_seconds} detik. Job belum dibuat. "
                 "Coba upload ulang setelah beban server berkurang."
@@ -191,6 +199,7 @@ async def process_youtube(
     processing_mode: Literal["automatic", "manual"] | None = Form(None),
     crop_vertical: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
+    burn_captions: bool | None = Form(None),
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Form(None),
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
@@ -213,6 +222,7 @@ async def process_youtube(
         processing_mode=processing_mode,
         crop_vertical=crop_vertical,
         generate_metadata=generate_metadata,
+        burn_captions=burn_captions,
         output_preset=output_preset,
         visual_style=visual_style,
         render_acceleration=render_acceleration,
@@ -332,8 +342,12 @@ def _processing_options_from_values(
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = None,
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = None,
     campaign_brief_json: str | None = None,
+    burn_captions: bool | None = None,
 ) -> JobProcessingOptions:
     defaults = default_processing_options().model_dump()
+    resolved_mode = processing_mode if processing_mode is not None else defaults["processing_mode"]
+    # Automatic jobs stay clean source-first exports unless captions are requested.
+    default_captions = defaults["burn_captions"] and resolved_mode != "automatic"
     try:
         campaign_brief = _parse_campaign_brief(campaign_brief_json)
         return JobProcessingOptions.model_validate(
@@ -365,6 +379,7 @@ def _processing_options_from_values(
                     if generate_metadata is not None
                     else defaults["generate_metadata"]
                 ),
+                "burn_captions": burn_captions if burn_captions is not None else default_captions,
                 "output_preset": (
                     output_preset if output_preset is not None else defaults["output_preset"]
                 ),

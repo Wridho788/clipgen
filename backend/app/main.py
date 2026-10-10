@@ -20,6 +20,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.config import settings
+from app.core.errors import ErrorCode, PipelineError
 from app.database import SessionLocal, init_db, recover_jobs_after_startup
 from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
@@ -193,7 +194,29 @@ async def readiness():
     }
 
 
-# --- Global error handler ---
+# --- Error handlers ---
+_PIPELINE_ERROR_STATUS = {
+    ErrorCode.EDIT_CONFLICT: 409,
+    ErrorCode.EDIT_INVALID: 422,
+    ErrorCode.CANDIDATE_BOUNDARY_INVALID: 422,
+    ErrorCode.SOURCE_MISSING: 409,
+    ErrorCode.SOURCE_CORRUPT: 400,
+    ErrorCode.SOURCE_UNSUPPORTED: 400,
+    ErrorCode.AUDIO_MISSING: 400,
+    ErrorCode.SOURCE_TOO_LARGE: 413,
+    ErrorCode.SOURCE_PROBE_TIMEOUT: 504,
+}
+
+
+@app.exception_handler(PipelineError)
+async def pipeline_error_handler(request, exc: PipelineError):
+    """Expose the stable error code next to the human-readable message."""
+    return JSONResponse(
+        status_code=_PIPELINE_ERROR_STATUS.get(exc.code, 500),
+        content={"detail": str(exc), "code": exc.code.value},
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)

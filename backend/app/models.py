@@ -1,5 +1,10 @@
 """
-ORM models. Lihat ARCHITECTURE.md bagian 2 untuk rasionalisasi schema.
+ORM models.
+
+``Job`` plays the role of the blueprint's Project + SourceAsset + analysis run;
+``Clip`` combines ClipCandidate, its canonical ClipEdit document, and the latest
+export. See docs/08-repository-audit.md for why the tables were extended rather
+than split.
 """
 import json
 import uuid
@@ -43,6 +48,8 @@ class Job(Base):
     status = Column(String, nullable=False, default="pending")
     progress = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
+    # Stable failure code from app.core.errors.ErrorCode (docs/04 §7).
+    error_code = Column(String, nullable=True)
     warning_message = Column(Text, nullable=True)
     # Transcripts can be hundreds of KB per job; load them only when a caller
     # reads the attribute so job lists and status polling stay cheap.
@@ -141,20 +148,44 @@ class Clip(Base):
     id = Column(String, primary_key=True, default=gen_uuid)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
 
+    # Current range in source seconds; mirrors the saved edit's trim.
     start_time = Column(Float, nullable=False)
     end_time = Column(Float, nullable=False)
+    # Range originally proposed by candidate generation ("reset to suggestion").
+    suggested_start_time = Column(Float, nullable=True)
+    suggested_end_time = Column(Float, nullable=True)
+    # Internal ranking score; never displayed as a percentage or probability.
     highlight_score = Column(Float, nullable=False, default=0.0)
-    # Structured explanation of a semantic selection, stored as JSON for the
-    # local SQLite-first deployment. Older clips simply retain NULL.
+    # Candidate signals + explanation (app.services.candidates.Candidate.analysis).
     analysis_json = Column(Text, nullable=True)
+    algorithm_version = Column(String, nullable=True)
+
+    # suggested | accepted | rejected | edited | exported
+    review_status = Column(String, nullable=False, default="suggested")
+    review_reason = Column(String, nullable=True)
+    # User-controlled order inside the job's candidate list.
+    position = Column(Integer, nullable=True)
+
+    # Canonical edit document (app.core.edit_model.ClipEdit) and its revision.
+    # ``rendered_revision`` records which revision the current file reflects.
+    edit_json = Column(Text, nullable=True)
+    edit_revision = Column(Integer, nullable=False, default=0)
+    rendered_revision = Column(Integer, nullable=True)
 
     file_path = Column(String, nullable=True)
     title = Column(String, nullable=True)
     caption = Column(Text, nullable=True)
     hashtags = Column(Text, nullable=True)  # JSON-encoded list[str]
 
+    # Render status: processing | ready | failed. A failed re-render keeps the
+    # previous file and status "ready" with ``render_error_*`` populated.
     status = Column(String, nullable=False, default="processing")
+    render_error_code = Column(String, nullable=True)
+    render_error_message = Column(Text, nullable=True)
+    render_report_json = Column(Text, nullable=True)
+    exported_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     job = relationship("Job", back_populates="clips")
     feedback = relationship("ClipFeedback", back_populates="clip", cascade="all, delete-orphan")

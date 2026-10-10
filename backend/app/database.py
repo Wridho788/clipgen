@@ -1,10 +1,11 @@
 """
-Database setup. SQLite via SQLAlchemy — pilihan ini dijelaskan di
-ARCHITECTURE.md bagian 2. Interface Session di sini dibuat generic
-supaya swap ke Postgres nanti tinggal ganti database_url.
+Database setup. SQLite via SQLAlchemy (lihat docs/08-repository-audit.md).
+Interface Session di sini dibuat generic supaya swap ke Postgres nanti tinggal
+ganti database_url.
 """
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -68,47 +69,160 @@ def _configure_sqlite_journal() -> None:
         connection.commit()
 
 
+SCHEMA_VERSION = 2
+
+
 def _apply_sqlite_schema_upgrades():
-    """Keep the personal SQLite database compatible without an Alembic dependency."""
+    """Apply numbered, recorded schema migrations (docs/02 §6).
+
+    Kept dependency-free for the personal SQLite deployment. Each migration is
+    idempotent (it inspects existing columns first) so databases created by
+    ``create_all`` and legacy databases converge on the same schema. Applied
+    versions are recorded in ``schema_migrations``; unknown columns are never
+    dropped.
+    """
     if engine.dialect.name != "sqlite":
         return
+    run_migrations()
 
-    inspector = inspect(engine)
-    if "jobs" not in inspector.get_table_names():
+
+def run_migrations(target_engine=None) -> list[int]:
+    """Apply pending migrations and return the versions applied in this call."""
+    target_engine = target_engine or engine
+    with target_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                "version INTEGER PRIMARY KEY, name VARCHAR NOT NULL, applied_at DATETIME NOT NULL)"
+            )
+        )
+        applied = {
+            int(row[0]) for row in connection.execute(text("SELECT version FROM schema_migrations"))
+        }
+
+    newly_applied: list[int] = []
+    for version, name, migration in MIGRATIONS:
+        if version in applied:
+            continue
+        with target_engine.begin() as connection:
+            migration(connection)
+            connection.execute(
+                text("INSERT INTO schema_migrations (version, name, applied_at) VALUES (:v, :n, :t)"),
+                {"v": version, "n": name, "t": datetime.utcnow()},
+            )
+        newly_applied.append(version)
+    return newly_applied
+
+
+def current_schema_version(target_engine=None) -> int:
+    target_engine = target_engine or engine
+    with target_engine.connect() as connection:
+        if "schema_migrations" not in inspect(connection).get_table_names():
+            return 0
+        value = connection.execute(text("SELECT MAX(version) FROM schema_migrations")).scalar()
+    return int(value or 0)
+
+
+def _add_missing_columns(connection, table: str, columns: dict[str, str]) -> None:
+    inspector = inspect(connection)
+    if table not in inspector.get_table_names():
         return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    for column_name, column_definition in columns.items():
+        if column_name not in existing:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_definition}"))
 
-    existing_columns = {column["name"] for column in inspector.get_columns("jobs")}
-    upgrades = {
-        "source_name": "VARCHAR",
-        "owner_id": "VARCHAR",
-        "source_duration_seconds": "FLOAT",
-        "source_size_bytes": "INTEGER",
-        "processing_options": "TEXT",
-        "parent_job_id": "VARCHAR",
-        "retry_count": "INTEGER NOT NULL DEFAULT 0",
-        "warning_message": "TEXT",
-        "stage_metrics_json": "TEXT",
-        "stage_estimates_json": "TEXT",
-        "automatic_summary_json": "TEXT",
-        "processing_started_at": "DATETIME",
-        "stage_started_at": "DATETIME",
-        "heartbeat_at": "DATETIME",
-        "completed_at": "DATETIME",
-    }
 
-    with engine.begin() as connection:
-        for column_name, column_definition in upgrades.items():
-            if column_name not in existing_columns:
-                connection.execute(
-                    text(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_definition}")
-                )
+def _migration_001_v1_columns(connection) -> None:
+    """Columns added during v1 development (previously ad-hoc upgrades)."""
+    _add_missing_columns(
+        connection,
+        "jobs",
+        {
+            "source_name": "VARCHAR",
+            "owner_id": "VARCHAR",
+            "source_duration_seconds": "FLOAT",
+            "source_size_bytes": "INTEGER",
+            "processing_options": "TEXT",
+            "parent_job_id": "VARCHAR",
+            "retry_count": "INTEGER NOT NULL DEFAULT 0",
+            "warning_message": "TEXT",
+            "stage_metrics_json": "TEXT",
+            "stage_estimates_json": "TEXT",
+            "automatic_summary_json": "TEXT",
+            "processing_started_at": "DATETIME",
+            "stage_started_at": "DATETIME",
+            "heartbeat_at": "DATETIME",
+            "completed_at": "DATETIME",
+        },
+    )
+    _add_missing_columns(connection, "clips", {"analysis_json": "TEXT"})
 
-    if "clips" not in inspector.get_table_names():
+
+def _migration_002_candidate_review_and_edits(connection) -> None:
+    """Candidate review state, canonical edit document, and render diagnostics."""
+    _add_missing_columns(connection, "jobs", {"error_code": "VARCHAR"})
+    _add_missing_columns(
+        connection,
+        "clips",
+        {
+            "review_status": "VARCHAR NOT NULL DEFAULT 'suggested'",
+            "review_reason": "VARCHAR",
+            "algorithm_version": "VARCHAR",
+            "suggested_start_time": "FLOAT",
+            "suggested_end_time": "FLOAT",
+            "edit_json": "TEXT",
+            "edit_revision": "INTEGER NOT NULL DEFAULT 0",
+            "rendered_revision": "INTEGER",
+            "render_error_code": "VARCHAR",
+            "render_error_message": "TEXT",
+            "render_report_json": "TEXT",
+            "position": "INTEGER",
+            "exported_at": "DATETIME",
+            "updated_at": "DATETIME",
+        },
+    )
+    if "clips" not in inspect(connection).get_table_names():
         return
-    clip_columns = {column["name"] for column in inspector.get_columns("clips")}
-    if "analysis_json" not in clip_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE clips ADD COLUMN analysis_json TEXT"))
+    # Existing clips keep their current range as the "AI suggestion" so the
+    # editor's reset button and boundary-correction metrics stay meaningful.
+    connection.execute(
+        text(
+            "UPDATE clips SET suggested_start_time = start_time "
+            "WHERE suggested_start_time IS NULL"
+        )
+    )
+    connection.execute(
+        text("UPDATE clips SET suggested_end_time = end_time WHERE suggested_end_time IS NULL")
+    )
+    connection.execute(
+        text(
+            "UPDATE clips SET rendered_revision = 0 "
+            "WHERE rendered_revision IS NULL AND file_path IS NOT NULL"
+        )
+    )
+    connection.execute(
+        text(
+            "UPDATE clips SET algorithm_version = 'even-spacing-v1' "
+            "WHERE algorithm_version IS NULL"
+        )
+    )
+    rows = connection.execute(
+        text("SELECT id, job_id FROM clips WHERE position IS NULL ORDER BY job_id, created_at, id")
+    ).fetchall()
+    positions: dict[str, int] = {}
+    for clip_id, job_id in rows:
+        positions[job_id] = positions.get(job_id, 0) + 1
+        connection.execute(
+            text("UPDATE clips SET position = :position WHERE id = :id"),
+            {"position": positions[job_id], "id": clip_id},
+        )
+
+
+MIGRATIONS = (
+    (1, "v1_columns", _migration_001_v1_columns),
+    (2, "candidate_review_and_edits", _migration_002_candidate_review_and_edits),
+)
 
 
 def _ensure_local_owner() -> None:
@@ -154,6 +268,7 @@ class StartupRecoveryReport:
     retry_job_ids: tuple[str, ...] = ()
     failed_jobs: int = 0
     failed_clips: int = 0
+    recovered_renders: int = 0
 
 
 def recover_jobs_after_startup() -> StartupRecoveryReport:
@@ -204,6 +319,7 @@ def recover_jobs_after_startup() -> StartupRecoveryReport:
         retry_job_ids: list[str] = []
         for job in interrupted_jobs:
             job.status = "failed"
+            job.error_code = "INTERRUPTED"
             job.error_message = message
             job.warning_message = "Jalankan ulang secara manual bila masih diperlukan."
             job.updated_at = now
@@ -222,12 +338,29 @@ def recover_jobs_after_startup() -> StartupRecoveryReport:
                 .update({Clip.status: "failed"}, synchronize_session=False)
             )
 
+        # A re-render (trim/export) of a clip on a finished job can be cut off
+        # by a restart too. Keep the previous file when it still exists so the
+        # clip stays usable, and record why the new render did not finish.
+        orphaned_renders = (
+            db.query(Clip)
+            .join(Job, Clip.job_id == Job.id)
+            .filter(Clip.status == "processing", Job.status.notin_(ACTIVE_INTERRUPTIBLE_JOB_STATUSES + ("pending",)))
+            .all()
+        )
+        for clip in orphaned_renders:
+            has_file = bool(clip.file_path) and Path(clip.file_path).exists()
+            clip.status = "ready" if has_file else "failed"
+            clip.render_error_code = "INTERRUPTED"
+            clip.render_error_message = "Render terhenti karena backend restart. Jalankan render ulang."
+            failed_clips += 0 if has_file else 1
+
         db.commit()
         return StartupRecoveryReport(
             pending_job_ids=pending_job_ids,
             retry_job_ids=tuple(retry_job_ids),
             failed_jobs=failed_jobs,
             failed_clips=failed_clips,
+            recovered_renders=len(orphaned_renders),
         )
 
 

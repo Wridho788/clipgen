@@ -9,6 +9,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import settings
+from app.core.edit_model import ClipEdit
 
 
 class CampaignBrief(BaseModel):
@@ -66,6 +67,9 @@ class JobProcessingOptions(BaseModel):
     processing_mode: Literal["automatic", "manual"] = "manual"
     crop_vertical: bool = False
     generate_metadata: bool = True
+    # Burn editable transcript captions into exports. Requires transcription;
+    # captions remain editable per clip regardless of this initial choice.
+    burn_captions: bool = True
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] = "original"
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] = "clean"
     campaign_brief: Optional[CampaignBrief] = None
@@ -103,6 +107,7 @@ def default_processing_options() -> JobProcessingOptions:
         processing_mode="manual",
         crop_vertical=False,
         generate_metadata=True,
+        burn_captions=True,
         output_preset="original",
         visual_style="clean",
         campaign_brief=None,
@@ -149,6 +154,7 @@ class JobResponse(BaseModel):
     status: str
     progress: int
     error_message: Optional[str] = None
+    error_code: Optional[str] = None
     warning_message: Optional[str] = None
     stage_metrics_json: Optional[str] = None
     stage_estimates_json: Optional[str] = None
@@ -182,13 +188,56 @@ class ClipResponse(BaseModel):
     job_id: str
     start_time: float
     end_time: float
+    suggested_start_time: Optional[float] = None
+    suggested_end_time: Optional[float] = None
     file_path: Optional[str] = None
     title: Optional[str] = None
     caption: Optional[str] = None
     hashtags: Optional[str] = None  # JSON string, di-parse di frontend
     distribution: Optional[dict[str, object]] = None
+    # Render status: processing | ready | failed.
     status: str
+    review_status: str = "suggested"
+    review_reason: Optional[str] = None
+    position: Optional[int] = None
+    # Candidate rank, signals, and explanation; never a view forecast.
+    candidate: Optional[dict[str, object]] = None
+    edit: Optional[ClipEdit] = None
+    edit_revision: int = 0
+    rendered_revision: Optional[int] = None
+    render_stale: bool = False
+    render_error_code: Optional[str] = None
+    render_error_message: Optional[str] = None
+    render_report: Optional[dict[str, object]] = None
+    exported_at: Optional[datetime] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class ClipEditSaveRequest(BaseModel):
+    """Autosave payload; ``base_revision`` enables stale-write detection."""
+
+    base_revision: int = Field(ge=0)
+    edit: ClipEdit
+
+
+class ClipReviewRequest(BaseModel):
+    status: Literal["suggested", "accepted", "rejected"]
+    reason: Optional[
+        Literal[
+            "context_missing",
+            "weak_moment",
+            "bad_boundaries",
+            "transcript_error",
+            "repeated_content",
+            "poor_crop",
+            "other",
+        ]
+    ] = None
+
+
+class ClipOrderRequest(BaseModel):
+    clip_ids: list[str] = Field(min_length=1, max_length=200)
 
 
 class ClipUpdateRequest(BaseModel):
