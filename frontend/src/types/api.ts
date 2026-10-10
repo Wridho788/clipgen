@@ -1,5 +1,5 @@
-// Types — harus sinkron manual dengan backend/app/schemas.py
-// (versi minimal ini belum pakai OpenAPI codegen, lihat ARCHITECTURE.md)
+// Types — harus sinkron manual dengan backend/app/schemas.py dan
+// backend/app/core/edit_model.py (belum pakai OpenAPI codegen).
 
 export type JobStatus =
   | "pending"
@@ -50,6 +50,7 @@ export interface JobProcessingOptions {
   processing_mode: "automatic" | "manual";
   crop_vertical: boolean;
   generate_metadata: boolean;
+  burn_captions?: boolean;
   output_preset: "original" | "tiktok" | "reels" | "youtube_shorts" | "square" | "landscape";
   visual_style: "clean" | "blur" | "crop" | "zoom" | "split";
   campaign_brief?: CampaignBrief | null;
@@ -97,6 +98,7 @@ export interface JobResponse {
   status: JobStatus;
   progress: number;
   error_message: string | null;
+  error_code?: string | null;
   warning_message: string | null;
   stage_metrics_json: string | null;
   stage_estimates_json: string | null;
@@ -122,18 +124,105 @@ export interface JobResponse {
   updated_at: string;
 }
 
+export type ReviewStatus = "suggested" | "accepted" | "rejected" | "edited" | "exported";
+
+export type RejectionReason =
+  | "context_missing"
+  | "weak_moment"
+  | "bad_boundaries"
+  | "transcript_error"
+  | "repeated_content"
+  | "poor_crop"
+  | "other";
+
+export type OutputPreset = JobProcessingOptions["output_preset"];
+export type VisualStyle = JobProcessingOptions["visual_style"];
+
+export interface CaptionStyle {
+  font_size: number;
+  text_color: string;
+  background: "none" | "outline" | "box";
+  background_color: string;
+  position_y: number;
+  max_chars_per_line: number;
+  bold: boolean;
+}
+
+export interface CaptionCue {
+  id: string;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  original_text?: string | null;
+}
+
+/** Canonical edit document shared by the preview and the FFmpeg export. */
+export interface ClipEdit {
+  schema_version: number;
+  trim_start_ms: number;
+  trim_end_ms: number;
+  output_preset: OutputPreset;
+  visual_style: VisualStyle;
+  framing: { focus_x: number; focus_y: number };
+  captions: { enabled: boolean; style: CaptionStyle; cues: CaptionCue[] };
+  audio: { enabled: boolean; normalize: boolean };
+  watermark_enabled: boolean;
+}
+
+export interface CandidateInfo {
+  algorithm_version: string;
+  rank?: number;
+  total?: number;
+  score_meaning: string;
+  signals: Record<string, number>;
+  explanation: string[];
+}
+
+export interface RenderReport {
+  revision: number;
+  rendered_at: string;
+  render_seconds: number;
+  encoder: string;
+  captions_rendered: number;
+  validation: {
+    ok: boolean;
+    checks: Record<string, boolean>;
+    problems: string[];
+    width: number | null;
+    height: number | null;
+    duration_seconds: number | null;
+    has_audio: boolean;
+    size_bytes: number;
+  };
+}
+
 export interface ClipResponse {
   id: string;
   job_id: string;
   start_time: number;
   end_time: number;
+  suggested_start_time?: number | null;
+  suggested_end_time?: number | null;
   file_path: string | null;
   title: string | null;
   caption: string | null;
   hashtags: string | null; // JSON-encoded string, parse dengan JSON.parse
   distribution?: DistributionPack | null;
   status: ClipStatus;
+  review_status?: ReviewStatus;
+  review_reason?: RejectionReason | null;
+  position?: number | null;
+  candidate?: CandidateInfo | null;
+  edit?: ClipEdit | null;
+  edit_revision?: number;
+  rendered_revision?: number | null;
+  render_stale?: boolean;
+  render_error_code?: string | null;
+  render_error_message?: string | null;
+  render_report?: RenderReport | null;
+  exported_at?: string | null;
   created_at: string;
+  updated_at?: string | null;
 }
 
 export interface DistributionPack {

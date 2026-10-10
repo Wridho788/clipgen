@@ -14,6 +14,7 @@ import { JobProgressBar } from "@/components/JobProgressBar";
 import { JobStageTimeline } from "@/components/JobStageTimeline";
 import { ClipCard } from "@/components/ClipCard";
 import { ClipGallery } from "@/components/ClipGallery";
+import { ClipEditor } from "@/components/editor/ClipEditor";
 import { CopyButton } from "@/components/CopyButton";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -203,9 +204,15 @@ export default function JobPage() {
             </section>
           )}
           {selectedClip && (
-            <section className="max-w-5xl">
+            <section>
               <div className="mb-3 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-violet-600 dark:text-violet-300">Editor klip</p><h3 className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{selectedClip.title || "Klip terpilih"}</h3></div><span className="text-xs text-slate-500 dark:text-slate-400">{readyClips.findIndex((clip) => clip.id === selectedClip.id) + 1} / {readyClips.length}</span></div>
-              <ClipCard clip={selectedClip} />
+              <ClipEditor
+                key={selectedClip.id}
+                clip={selectedClip}
+                clips={readyClips}
+                sourceDurationSeconds={job.source_duration_seconds}
+                onSelect={setSelectedClipId}
+              />
             </section>
           )}
           {clips?.filter((clip) => clip.status === "failed").map((clip) => <ClipCard key={clip.id} clip={clip} />)}

@@ -54,6 +54,8 @@ export function VideoUpload() {
     DEFAULT_MANUAL_YOUTUBE_OPTIONS
   );
   const [renderOptions, setRenderOptions] = useState<RenderOptions>(DEFAULT_RENDER_OPTIONS);
+  // Editable transcript captions burned into exports (file + manual YouTube).
+  const [burnCaptions, setBurnCaptions] = useState(true);
   const [campaignBrief, setCampaignBrief] = useState<CampaignBrief | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubePreflight, setYoutubePreflight] = useState<YoutubePreflightResponse | null>(null);
@@ -75,6 +77,7 @@ export function VideoUpload() {
     processing_mode: "manual",
     crop_vertical: false,
     generate_metadata: true,
+    burn_captions: burnCaptions,
     ...renderOptions,
     campaign_brief: campaignBrief,
   } satisfies Partial<JobProcessingOptions>;
@@ -92,7 +95,7 @@ export function VideoUpload() {
       ? {
           generate_metadata: true,
         }
-      : manualYoutubeOptions),
+      : { ...manualYoutubeOptions, burn_captions: burnCaptions }),
   } satisfies Partial<JobProcessingOptions>;
 
   const refreshYoutubePreflight = useCallback(async () => {
@@ -309,7 +312,7 @@ export function VideoUpload() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Workflow short-form</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">Klip berurutan → format sosial → metadata → render batch.</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Kandidat di batas kalimat → format sosial → caption → review &amp; edit → export.</p>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -345,8 +348,20 @@ export function VideoUpload() {
               </select>
             </label>
           </div>
-          <div className="flex justify-end">
-            <p className="border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {(mode === "file" || youtubeProcessingMode === "manual") && (
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={burnCaptions}
+                  disabled={uploading}
+                  onChange={(event) => setBurnCaptions(event.target.checked)}
+                  className="h-4 w-4 accent-violet-600"
+                />
+                Caption otomatis dari transkrip (bisa diedit per klip)
+              </label>
+            )}
+            <p className="ml-auto border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
               Akselerasi otomatis — perangkat aktif tampil di status sistem.
             </p>
           </div>

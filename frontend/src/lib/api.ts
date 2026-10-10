@@ -3,10 +3,12 @@ import {
   AuthSessionResponse,
   AuthUser,
   CampaignBrief,
+  ClipEdit,
   ClipFeedbackResponse,
   ClipResponse,
   ClipUpdateRequest,
   JobProcessingOptions,
+  RejectionReason,
   JobCreateResponse,
   JobResponse,
   JobStatus,
@@ -27,14 +29,24 @@ export interface UploadProgress {
   percent: number;
 }
 
+/** API failure carrying the HTTP status and the backend's stable error code. */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
     let message = response.statusText;
+    let code: string | undefined;
 
     try {
       if (contentType.includes("application/json")) {
         const data = await response.json();
+        code = typeof data?.code === "string" ? data.code : undefined;
         const detail = data?.detail;
         if (typeof detail === "string") {
           message = detail;
@@ -50,7 +62,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
       message = response.statusText;
     }
 
-    throw new Error(message || `API error ${response.status}`);
+    throw new ApiError(message || `API error ${response.status}`, response.status, code);
   }
 
   if (response.status === 204) return undefined as T;
@@ -204,8 +216,55 @@ export const api = {
     await handleResponse(response);
   },
 
-  getClipPreviewUrl: (clipId: string): string =>
-    withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/preview`),
+  saveClipEdit: async (clipId: string, baseRevision: number, edit: ClipEdit): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/edit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_revision: baseRevision, edit }),
+    });
+    return handleResponse(response);
+  },
+
+  renderClip: async (clipId: string): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/render`, { method: "POST" });
+    return handleResponse(response);
+  },
+
+  reviewClip: async (
+    clipId: string,
+    status: "suggested" | "accepted" | "rejected",
+    reason?: RejectionReason,
+  ): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, reason: reason || undefined }),
+    });
+    return handleResponse(response);
+  },
+
+  duplicateClip: async (clipId: string): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/duplicate`, { method: "POST" });
+    return handleResponse(response);
+  },
+
+  reorderClips: async (jobId: string, clipIds: string[]): Promise<ClipResponse[]> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/job/${jobId}/order`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_ids: clipIds }),
+    });
+    return handleResponse(response);
+  },
+
+  getClipSourceUrl: (clipId: string): string =>
+    withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/source`),
+
+  /** ``revision`` busts the browser cache after a re-render replaces the file. */
+  getClipPreviewUrl: (clipId: string, revision?: number | null): string => {
+    const query = revision !== undefined && revision !== null ? `?r=${revision}` : "";
+    return withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/preview${query}`);
+  },
 
   getClipDownloadUrl: (clipId: string): string =>
     withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/file`),
@@ -324,6 +383,9 @@ function appendProcessingOptions(formData: FormData, options?: Partial<JobProces
   }
   if (options?.generate_metadata !== undefined) {
     formData.append("generate_metadata", String(options.generate_metadata));
+  }
+  if (options?.burn_captions !== undefined) {
+    formData.append("burn_captions", String(options.burn_captions));
   }
   if (options?.output_preset) formData.append("output_preset", options.output_preset);
   if (options?.visual_style) formData.append("visual_style", options.visual_style);

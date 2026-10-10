@@ -68,6 +68,7 @@ export function JobProgressBar({ job }: { job: JobResponse }) {
       {isFailed && job.error_message && (
         <p className="mt-3 border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
           {job.error_message}
+          {job.error_code && <span className="mt-0.5 block font-mono text-[11px] text-rose-500">{job.error_code}</span>}
         </p>
       )}
     </section>

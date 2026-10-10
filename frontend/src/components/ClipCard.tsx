@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Download, Edit3, ExternalLink, Facebook, Loader2, Save, Scissors, ShieldAlert, ShieldCheck, Trash2, X, Youtube } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Download, Edit3, ExternalLink, Facebook, Loader2, RefreshCw, Save, Scissors, ShieldAlert, ShieldCheck, Trash2, X, Youtube } from "lucide-react";
 import { ClipResponse, parseHashtags } from "@/types/api";
 import { api } from "@/lib/api";
 import { useDeleteClip, useTrimClip, useUpdateClip } from "@/hooks/useClips";
@@ -9,7 +10,11 @@ import { formatDuration, formatSeconds } from "@/lib/status";
 import { CopyButton } from "@/components/CopyButton";
 import { ClipFeedback } from "@/components/ClipFeedback";
 
-export function ClipCard({ clip }: { clip: ClipResponse }) {
+/**
+ * Metadata, distribution pack, and clip actions. ``embedded`` is used inside
+ * the editor, where preview, trim, and export live in their own panels.
+ */
+export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embedded?: boolean }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isTrimming, setIsTrimming] = useState(false);
   const [title, setTitle] = useState(clip.title || "");
@@ -29,6 +34,11 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
   const updateClip = useUpdateClip(clip.job_id);
   const deleteClip = useDeleteClip(clip.job_id);
   const trimClip = useTrimClip(clip.job_id);
+  const queryClient = useQueryClient();
+  const rerender = useMutation({
+    mutationFn: () => api.renderClip(clip.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["clips", clip.job_id] }),
+  });
 
   useEffect(() => {
     setTitle(clip.title || "");
@@ -40,11 +50,25 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
 
   if (clip.status === "failed") {
     return (
-      <div className="border border-rose-200 bg-rose-50 p-4">
-        <p className="text-sm font-medium text-rose-700">Clip gagal diproses</p>
-        <p className="mt-1 text-sm text-rose-600">
-          {formatSeconds(clip.start_time)} - {formatSeconds(clip.end_time)}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3 border border-rose-200 bg-rose-50 p-4">
+        <div>
+          <p className="text-sm font-medium text-rose-700">Clip gagal diproses</p>
+          <p className="mt-1 text-sm text-rose-600">
+            {formatSeconds(clip.start_time)} - {formatSeconds(clip.end_time)}
+          </p>
+          {clip.render_error_message && <p className="mt-1 text-sm text-rose-700">{clip.render_error_message}</p>}
+          {clip.render_error_code && <p className="mt-0.5 font-mono text-[11px] text-rose-500">{clip.render_error_code}</p>}
+          {rerender.error && <p className="mt-1 text-sm text-rose-700">{rerender.error.message}</p>}
+        </div>
+        <button
+          type="button"
+          onClick={() => rerender.mutate()}
+          disabled={rerender.isPending}
+          className="inline-flex items-center gap-2 border border-rose-300 bg-white px-3 py-2 text-sm text-rose-700 disabled:opacity-60"
+        >
+          {rerender.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          Render ulang
+        </button>
       </div>
     );
   }
@@ -84,11 +108,11 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
   };
 
   return (
-    <article className="clipgen-panel rounded-2xl p-4 shadow-sm">
-      {clip.file_path ? (
+    <article className={embedded ? "" : "clipgen-panel rounded-2xl p-4 shadow-sm"}>
+      {embedded ? null : clip.file_path ? (
         <div className="bg-black">
           <video
-            src={api.getClipPreviewUrl(clip.id)}
+            src={api.getClipPreviewUrl(clip.id, clip.rendered_revision)}
             controls
             preload="metadata"
             className="max-h-[560px] min-h-56 w-full object-contain"
@@ -101,7 +125,7 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
       )}
 
       {isEditing ? (
-        <div className="mt-4 space-y-3">
+        <div className={`${embedded ? "" : "mt-4 "}space-y-3`}>
           <input
             type="text"
             value={title}
@@ -187,7 +211,7 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
           </div>
         </div>
       ) : (
-        <div className="mt-4 space-y-3">
+        <div className={`${embedded ? "" : "mt-4 "}space-y-3`}>
           <div>
             <div className="flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span>{formatSeconds(clip.start_time)} - {formatSeconds(clip.end_time)}</span>
@@ -279,19 +303,19 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
               <Edit3 className="h-4 w-4" />
               Edit
             </button>
-            <button
+            {!embedded && <button
               onClick={() => setIsTrimming(true)}
               className="inline-flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:border-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-cyan-300"
               title="Atur ulang rentang klip"
             >
               <Scissors className="h-4 w-4" />
               Trim
-            </button>
+            </button>}
             <CopyButton value={captionBundle} label="Copy caption" copiedLabel="Copied" />
-            {clip.file_path && (
+            {clip.file_path && !embedded && (
               <>
                 <a
-                  href={api.getClipPreviewUrl(clip.id)}
+                  href={api.getClipPreviewUrl(clip.id, clip.rendered_revision)}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:border-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-cyan-300"
@@ -360,5 +384,5 @@ function ComplianceSummary({ compliance }: { compliance: NonNullable<NonNullable
   const review = compliance.status === "review_required";
   const tone = blocked ? "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-100" : review ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100" : "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-100";
   const label = blocked ? "Jangan publish dulu" : review ? "Perlu review" : "Lolos guideline";
-  return <div className={`mt-3 flex items-start gap-2 border p-2.5 text-xs ${tone}`}><span className="mt-0.5">{blocked ? <ShieldAlert className="h-4 w-4" /> : review ? <AlertTriangle className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}</span><div><p className="font-semibold">{label} · {compliance.score}%</p><ul className="mt-1 space-y-0.5">{compliance.checks.filter((check) => check.status !== "pass").slice(0, 3).map((check) => <li key={check.key}>• {check.detail}</li>)}</ul></div></div>;
+  return <div className={`mt-3 flex items-start gap-2 border p-2.5 text-xs ${tone}`}><span className="mt-0.5">{blocked ? <ShieldAlert className="h-4 w-4" /> : review ? <AlertTriangle className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}</span><div><p className="font-semibold">{label} · {compliance.checks.filter((check) => check.status === "pass").length}/{compliance.checks.length} cek lolos</p><ul className="mt-1 space-y-0.5">{compliance.checks.filter((check) => check.status !== "pass").slice(0, 3).map((check) => <li key={check.key}>• {check.detail}</li>)}</ul></div></div>;
 }
