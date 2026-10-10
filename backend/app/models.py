@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import Column, String, Float, Integer, Text, ForeignKey, DateTime, UniqueConstraint
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import deferred, relationship
 
 from app.database import Base
 
@@ -44,7 +44,9 @@ class Job(Base):
     progress = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
     warning_message = Column(Text, nullable=True)
-    transcript_json = Column(Text, nullable=True)
+    # Transcripts can be hundreds of KB per job; load them only when a caller
+    # reads the attribute so job lists and status polling stay cheap.
+    transcript_json = deferred(Column(Text, nullable=True))
     stage_metrics_json = Column(Text, nullable=True)
     stage_estimates_json = Column(Text, nullable=True)
     automatic_summary_json = Column(Text, nullable=True)
@@ -142,6 +144,9 @@ class Clip(Base):
     start_time = Column(Float, nullable=False)
     end_time = Column(Float, nullable=False)
     highlight_score = Column(Float, nullable=False, default=0.0)
+    # Structured explanation of a semantic selection, stored as JSON for the
+    # local SQLite-first deployment. Older clips simply retain NULL.
+    analysis_json = Column(Text, nullable=True)
 
     file_path = Column(String, nullable=True)
     title = Column(String, nullable=True)

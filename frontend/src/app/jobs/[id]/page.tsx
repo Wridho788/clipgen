@@ -3,15 +3,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useMemo } from "react";
-import { AlertCircle, ArrowLeft, DownloadCloud, Loader2, OctagonX, RefreshCw, RotateCcw, Square } from "lucide-react";
+import { useMemo, useState } from "react";
+import { AlertCircle, ArrowLeft, DownloadCloud, Loader2, OctagonX, RefreshCw, RotateCcw, ShieldCheck, Square } from "lucide-react";
 import { api } from "@/lib/api";
+import { CampaignBrief } from "@/types/api";
 import { formatDateTime, formatTimeEstimate, isActiveJobStatus, isTerminalJobStatus } from "@/lib/status";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { useClips } from "@/hooks/useClips";
 import { JobProgressBar } from "@/components/JobProgressBar";
 import { JobStageTimeline } from "@/components/JobStageTimeline";
 import { ClipCard } from "@/components/ClipCard";
+import { ClipGallery } from "@/components/ClipGallery";
 import { CopyButton } from "@/components/CopyButton";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -29,6 +31,9 @@ export default function JobPage() {
   } = useClips(jobId, job?.status);
 
   const readyClips = useMemo(() => clips?.filter((clip) => clip.file_path) || [], [clips]);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const selectedClip = readyClips.find((clip) => clip.id === selectedClipId) || readyClips[0] || null;
+  const campaignBrief = useMemo(() => parseCampaignBrief(job?.processing_options), [job?.processing_options]);
 
   const cancelJob = useMutation({
     mutationFn: () => api.cancelJob(jobId),
@@ -50,15 +55,15 @@ export default function JobPage() {
   const canRetry = !!job && isTerminalJobStatus(job.status);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-2">
-          <Link href="/" className="inline-flex items-center gap-2 text-sm text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-cyan-200">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-violet-700 dark:text-slate-300 dark:hover:text-violet-200">
             <ArrowLeft className="h-4 w-4" />
             Kembali
           </Link>
           <div>
-            <h1 className="text-2xl font-semibold text-slate-950 dark:text-slate-50">Job {jobId.slice(0, 8)}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">{job?.source_name && !job.source_name.startsWith("http") ? job.source_name : `Project ${jobId.slice(0, 8)}`}</h1>
             {job && (
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 Dibuat {formatDateTime(job.created_at)} · Updated {formatDateTime(job.updated_at)}
@@ -72,7 +77,7 @@ export default function JobPage() {
           <button
             type="button"
             onClick={() => refetch()}
-            className="inline-flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:border-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-cyan-300"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-violet-300"
             title="Refresh job"
           >
             <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
@@ -116,21 +121,11 @@ export default function JobPage() {
       {job && <JobProgressBar job={job} />}
       {job && <JobStageTimeline job={job} />}
 
-      {job?.automatic_summary && Object.keys(job.automatic_summary).length > 0 && (
-        <div className="grid gap-3 border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-900 dark:border-cyan-300/30 dark:bg-cyan-300/10 dark:text-cyan-100 sm:grid-cols-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-cyan-700 dark:text-cyan-200">Mode otomatis</p>
-            <p className="mt-1 font-medium">{Number(job.automatic_summary.target_clip_count || 0)} target klip</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-cyan-700 dark:text-cyan-200">Pembuka dilewati</p>
-            <p className="mt-1 font-medium">{Math.round(Number(job.automatic_summary.intro_skip_seconds || 0))} detik</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-cyan-700 dark:text-cyan-200">Analisis visual</p>
-            <p className="mt-1 font-medium">{job.automatic_summary.montage_detected ? "Montage terdeteksi" : "Aturan intro standar"}</p>
-          </div>
-        </div>
+      {campaignBrief && (
+        <section className="rounded-2xl border border-violet-200 bg-violet-50/70 p-4 dark:border-violet-300/20 dark:bg-violet-400/10">
+          <div className="flex items-start gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-700 dark:bg-violet-300/15 dark:text-violet-200"><ShieldCheck className="h-4 w-4" /></div><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-700 dark:text-violet-200">Campaign brief</p><h2 className="mt-1 font-semibold text-violet-950 dark:text-violet-50">{campaignBrief.name}</h2><p className="mt-1 text-sm text-violet-800/80 dark:text-violet-100/80">{campaignBrief.min_clip_seconds}–{campaignBrief.max_clip_seconds} detik · hook {campaignBrief.hook_max_seconds} detik · {campaignBrief.hashtags.length} hashtag wajib</p></div></div>
+          {campaignBrief.required_phrases.length > 0 && <p className="mt-3 border-t border-violet-200 pt-3 text-xs text-violet-800 dark:border-violet-300/20 dark:text-violet-100">Narasi wajib: {campaignBrief.required_phrases.join(", ")}</p>}
+        </section>
       )}
 
       {job && isActiveJobStatus(job.status) && (
@@ -195,11 +190,25 @@ export default function JobPage() {
               Tidak ada klip
             </div>
           )}
-          <div className="grid gap-4 lg:grid-cols-2">
-            {clips?.map((clip) => (
-              <ClipCard key={clip.id} clip={clip} />
-            ))}
-          </div>
+          {readyClips.length > 0 && (
+            <section className="rounded-3xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/40 sm:p-4">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-2 px-1">
+                <div>
+                  <p className="text-sm font-semibold text-slate-950 dark:text-slate-50">Pilih klip untuk diedit</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Geser untuk melihat semua hasil. Detail, metadata, dan download tampil hanya untuk klip yang dipilih.</p>
+                </div>
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm dark:bg-slate-800 dark:text-slate-300">{readyClips.length} klip</span>
+              </div>
+              <ClipGallery clips={readyClips} selectedClipId={selectedClip?.id || null} onSelect={setSelectedClipId} />
+            </section>
+          )}
+          {selectedClip && (
+            <section className="max-w-5xl">
+              <div className="mb-3 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-violet-600 dark:text-violet-300">Editor klip</p><h3 className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{selectedClip.title || "Klip terpilih"}</h3></div><span className="text-xs text-slate-500 dark:text-slate-400">{readyClips.findIndex((clip) => clip.id === selectedClip.id) + 1} / {readyClips.length}</span></div>
+              <ClipCard clip={selectedClip} />
+            </section>
+          )}
+          {clips?.filter((clip) => clip.status === "failed").map((clip) => <ClipCard key={clip.id} clip={clip} />)}
         </div>
       )}
     </div>
@@ -217,14 +226,23 @@ function JobPageSkeleton() {
 
 function ClipSkeleton() {
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      {[0, 1].map((item) => (
-        <div key={item} className="clipgen-panel p-4">
-          <div className="min-h-56 w-full animate-pulse bg-slate-100 dark:bg-slate-900" />
-          <div className="mt-3 h-4 w-32 animate-pulse bg-slate-200 dark:bg-slate-800" />
-          <div className="mt-2 h-3 w-full animate-pulse bg-slate-100 dark:bg-slate-900" />
+    <div className="flex gap-3 overflow-hidden">
+      {[0, 1, 2, 3].map((item) => (
+        <div key={item} className="w-32 shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
+          <div className="aspect-[9/16] animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800" />
+          <div className="mt-2 h-3 w-20 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
         </div>
       ))}
     </div>
   );
+}
+
+function parseCampaignBrief(raw: string | null | undefined): CampaignBrief | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { campaign_brief?: CampaignBrief };
+    return parsed.campaign_brief || null;
+  } catch {
+    return null;
+  }
 }

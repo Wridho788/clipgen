@@ -25,7 +25,7 @@ from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
 from app.services.maintenance import maintenance_loop
 from app.core.pipeline.metadata_gen import test_ollama_connection
-from app.api.routes import auth, videos, jobs, clips, system
+from app.api.routes import auth, videos, jobs, clips, system, campaigns
 
 
 _file_logging_configured = False
@@ -144,14 +144,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         ).info("HTTP request completed")
         return response
 
-# --- CORS untuk frontend local dev ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Next.js dev ports
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.add_middleware(RequestLoggingMiddleware)
 
 # --- Include routers ---
@@ -160,6 +152,7 @@ app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"])
 
 
 # --- Health check ---
@@ -170,14 +163,14 @@ async def health():
     return {
         "status": "ok",
         "queue": job_queue.status(),
-        "version": app.version,
+        "version": api_app.version,
     }
 
 
 @app.get("/health/live")
 async def liveness():
     """Liveness probe: the HTTP process is responsive."""
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "version": api_app.version}
 
 
 @app.get("/health/ready")
@@ -205,6 +198,18 @@ async def readiness():
 async def global_exception_handler(request, exc):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# Wrap the entire error-handling stack: otherwise unhandled 500 responses
+# bypass CORS and the browser reports a misleading network/upload failure.
+api_app = app
+app = CORSMiddleware(
+    app=api_app,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 if __name__ == "__main__":

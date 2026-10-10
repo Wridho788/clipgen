@@ -17,7 +17,7 @@ from app.services.runtime_capabilities import get_runtime_capabilities
 
 @dataclass
 class Word:
-    """A word-level timestamp used for karaoke captions when available."""
+    """A word-level timestamp retained for transcript compatibility."""
 
     start: float
     end: float

@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Download, Edit3, ExternalLink, Facebook, Loader2, Save, Scissors, Trash2, X, Youtube } from "lucide-react";
+import { AlertTriangle, Download, Edit3, ExternalLink, Facebook, Loader2, Save, Scissors, ShieldAlert, ShieldCheck, Trash2, X, Youtube } from "lucide-react";
 import { ClipResponse, parseHashtags } from "@/types/api";
 import { api } from "@/lib/api";
 import { useDeleteClip, useTrimClip, useUpdateClip } from "@/hooks/useClips";
-import { formatDuration, formatPercent, formatSeconds } from "@/lib/status";
+import { formatDuration, formatSeconds } from "@/lib/status";
 import { CopyButton } from "@/components/CopyButton";
 import { ClipFeedback } from "@/components/ClipFeedback";
 
@@ -84,7 +84,7 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
   };
 
   return (
-    <article className="clipgen-panel p-4 shadow-sm">
+    <article className="clipgen-panel rounded-2xl p-4 shadow-sm">
       {clip.file_path ? (
         <div className="bg-black">
           <video
@@ -192,7 +192,6 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
             <div className="flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span>{formatSeconds(clip.start_time)} - {formatSeconds(clip.end_time)}</span>
               <span>{formatDuration(clip.start_time, clip.end_time)}</span>
-              <span>Score {formatPercent(clip.highlight_score)}</span>
             </div>
             <h3 className="mt-1 text-base font-semibold text-slate-950 dark:text-slate-50">{clip.title || "(belum ada judul)"}</h3>
           </div>
@@ -213,7 +212,7 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
                     Paket distribusi manual
                   </p>
                   <p className="mt-1 text-xs text-cyan-700 dark:text-cyan-100">
-                    Video sudah ber-watermark <strong>@RidhoWahyu</strong>. Copy metadata ini ke upload form platform.
+                    Video siap diunggah. Copy metadata ini ke form upload platform.
                   </p>
                 </div>
                 <div className="flex gap-1">
@@ -255,6 +254,14 @@ export function ClipCard({ clip }: { clip: ClipResponse }) {
               <p className="mt-2 text-[11px] text-cyan-700 dark:text-cyan-200">
                 Referensi hashtag: {distribution.hashtag_source === "youtube_source_tags+clip_metadata" ? "metadata YouTube sumber + clip" : "fallback dari metadata clip"}.
               </p>
+              {distribution.campaign && (
+                <div className="mt-3 border-t border-cyan-200 pt-3 dark:border-cyan-300/20">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-800 dark:text-cyan-200">Campaign aktif</p>
+                  <p className="mt-1 text-xs text-cyan-700 dark:text-cyan-100">{distribution.campaign.name}</p>
+                  {distribution.campaign.mentions.length > 0 && <p className="mt-1 text-[11px] text-cyan-700 dark:text-cyan-200">Mention: {distribution.campaign.mentions.join(" ")}</p>}
+                </div>
+              )}
+              {distribution.compliance && <ComplianceSummary compliance={distribution.compliance} />}
             </section>
           )}
 
@@ -346,4 +353,12 @@ function DistributionChecklist({ items }: { items: string[] }) {
       </ol>
     </div>
   );
+}
+
+function ComplianceSummary({ compliance }: { compliance: NonNullable<NonNullable<ClipResponse["distribution"]>["compliance"]> }) {
+  const blocked = compliance.status === "blocked";
+  const review = compliance.status === "review_required";
+  const tone = blocked ? "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-100" : review ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100" : "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-100";
+  const label = blocked ? "Jangan publish dulu" : review ? "Perlu review" : "Lolos guideline";
+  return <div className={`mt-3 flex items-start gap-2 border p-2.5 text-xs ${tone}`}><span className="mt-0.5">{blocked ? <ShieldAlert className="h-4 w-4" /> : review ? <AlertTriangle className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}</span><div><p className="font-semibold">{label} · {compliance.score}%</p><ul className="mt-1 space-y-0.5">{compliance.checks.filter((check) => check.status !== "pass").slice(0, 3).map((check) => <li key={check.key}>• {check.detail}</li>)}</ul></div></div>;
 }

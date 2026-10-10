@@ -56,3 +56,4 @@ def test_build_job_archive_uses_safe_unique_filenames(tmp_path):
 
     with zipfile.ZipFile(archive_path) as archive:
         assert archive.namelist() == ["01-A_B_C-clip-123.mp4"]
+

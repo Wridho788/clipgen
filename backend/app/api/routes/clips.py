@@ -28,17 +28,20 @@ from app.schemas import (
     ClipResponse,
     ClipTrimRequest,
     ClipUpdateRequest,
+    JobProcessingOptions,
+    default_processing_options,
 )
 from loguru import logger
 from app.services.clip_render_service import enqueue_clip_trim
 from app.services.distribution_metadata import build_distribution_pack
 from app.services.source_metadata import load_youtube_reference_hashtags
+from app.services.campaign_compliance import evaluate_campaign_compliance
 
 router = APIRouter()
 
 
 @router.get("/job/{job_id}", response_model=List[ClipResponse])
-async def list_clips_by_job(
+def list_clips_by_job(
     job_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -82,7 +85,7 @@ async def download_job_archive(
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)
-async def get_clip(
+def get_clip(
     clip_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -146,6 +149,7 @@ async def regenerate_clip_metadata(
         transcript_text,
         _metadata_language_for_job(job),
         reference_hashtags,
+        _campaign_brief_for_job(job),
     )
     clip.title = metadata.get("title")
     clip.caption = metadata.get("caption")
@@ -333,16 +337,28 @@ def _clip_response(clip: Clip, job: Job | None = None) -> ClipResponse:
         if job and job.source_type == "youtube_url"
         else []
     )
+    campaign_brief = _campaign_brief_for_job(job)
+    effective_tags = tags if isinstance(tags, list) else []
+    distribution = build_distribution_pack(
+        clip.title,
+        clip.caption,
+        effective_tags,
+        source_reference_hashtags=reference_tags,
+        source_name=job.source_name if job else None,
+        campaign_brief=campaign_brief,
+    )
+    compliance = evaluate_campaign_compliance(
+        campaign_brief,
+        transcript_text=_get_clip_transcript_text(job, clip),
+        title=clip.title,
+        caption=clip.caption,
+        hashtags=[*effective_tags, *(campaign_brief.hashtags if campaign_brief else [])],
+        duration_seconds=max(0.0, clip.end_time - clip.start_time),
+    )
+    if compliance is not None:
+        distribution["compliance"] = compliance
     return ClipResponse.model_validate(clip).model_copy(
-        update={
-            "distribution": build_distribution_pack(
-                clip.title,
-                clip.caption,
-                tags if isinstance(tags, list) else [],
-                source_reference_hashtags=reference_tags,
-                source_name=job.source_name if job else None,
-            )
-        }
+        update={"distribution": distribution}
     )
 
 
@@ -427,3 +443,17 @@ def _metadata_language_for_job(job: Job | None) -> str:
     except json.JSONDecodeError:
         return "id"
     return "en" if isinstance(options, dict) and options.get("metadata_language") == "en" else "id"
+
+
+def _campaign_brief_for_job(job: Job | None):
+    if not job:
+        return None
+    try:
+        stored = json.loads(job.processing_options or "{}")
+        if not isinstance(stored, dict) or not stored.get("campaign_brief"):
+            return None
+        defaults = default_processing_options().model_dump()
+        options = JobProcessingOptions.model_validate({**defaults, **stored})
+        return options.campaign_brief
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None

@@ -4,19 +4,43 @@
 export type JobStatus =
   | "pending"
   | "downloading"
-  | "analyzing_intro"
   | "extracting"
   | "transcribing"
-  | "detecting"
   | "cutting"
   | "cropping"
-  | "subtitling"
   | "generating_metadata"
   | "done"
   | "failed"
   | "cancelled";
 
 export type ClipStatus = "processing" | "ready" | "failed";
+
+export type CampaignPlatform = "tiktok" | "instagram_reels" | "youtube" | "facebook";
+
+export interface CampaignBrief {
+  id: string;
+  name: string;
+  description: string;
+  platforms: CampaignPlatform[];
+  min_clip_seconds: number;
+  max_clip_seconds: number;
+  hook_required: boolean;
+  hook_max_seconds: number;
+  preferred_hook_types: string[];
+  required_visuals: string[];
+  required_phrases: string[];
+  prohibited_terms: string[];
+  hashtags: string[];
+  mentions: string[];
+  cta: string | null;
+  title_style: "curiosity_truthful" | "direct" | "brand_safe";
+  source_only: boolean;
+  organic_only: boolean;
+  avoid_misleading_edits: boolean;
+  positive_brand_tone: boolean;
+  allow_voiceover: boolean;
+  retention_lock: boolean;
+}
 
 export interface JobProcessingOptions {
   min_clip_seconds: number;
@@ -25,14 +49,10 @@ export interface JobProcessingOptions {
   metadata_language: "id" | "en";
   processing_mode: "automatic" | "manual";
   crop_vertical: boolean;
-  generate_highlights: boolean;
   generate_metadata: boolean;
-  generate_subtitles: boolean;
-  context_aware: boolean;
   output_preset: "original" | "tiktok" | "reels" | "youtube_shorts" | "square" | "landscape";
   visual_style: "clean" | "blur" | "crop" | "zoom" | "split";
-  subtitle_style: "standard" | "karaoke";
-  hook_text: string | null;
+  campaign_brief?: CampaignBrief | null;
   render_acceleration: "auto";
 }
 
@@ -48,6 +68,20 @@ export interface ProcessingEstimateResponse {
   source_type: "upload" | "youtube_url";
   stage_estimates: Record<string, number>;
   estimated_processing_seconds: number;
+}
+
+export interface YoutubePreflightResponse {
+  can_start: boolean;
+  status: "ready" | "cookies_missing" | "cooldown";
+  message: string;
+  retry_after_seconds: number;
+  cookies_ready: boolean;
+}
+
+export interface CampaignCompliance {
+  status: "pass" | "review_required" | "blocked";
+  score: number;
+  checks: Array<{ key: string; label: string; status: "pass" | "review_required" | "blocked"; detail: string }>;
 }
 
 export interface JobResponse {
@@ -69,7 +103,7 @@ export interface JobResponse {
   automatic_summary_json: string | null;
   stage_metrics: Record<string, number>;
   stage_estimates: Record<string, number>;
-  automatic_summary: Record<string, string | number | boolean>;
+  automatic_summary: Record<string, unknown>;
   estimated_total_seconds: number;
   current_stage_eta_seconds: number;
   current_stage_elapsed_seconds: number;
@@ -93,7 +127,6 @@ export interface ClipResponse {
   job_id: string;
   start_time: number;
   end_time: number;
-  highlight_score: number;
   file_path: string | null;
   title: string | null;
   caption: string | null;
@@ -106,6 +139,15 @@ export interface ClipResponse {
 export interface DistributionPack {
   source_name: string | null;
   hashtag_source: "youtube_source_tags+clip_metadata" | "clip_metadata_fallback";
+  campaign?: {
+    id: string;
+    name: string;
+    cta: string | null;
+    mentions: string[];
+    organic_only: boolean;
+    retention_lock: boolean;
+  } | null;
+  compliance?: CampaignCompliance | null;
   youtube: {
     title: string;
     description: string;
@@ -229,12 +271,9 @@ export interface ReleaseInfoResponse {
   features: {
     local_upload: boolean;
     youtube_url: boolean;
-    upload_subtitles: boolean;
-    youtube_subtitles: boolean;
     vertical_crop: boolean;
     youtube_manual_options: boolean;
     youtube_automatic_multi_clip: boolean;
-    youtube_visual_intro_analysis: boolean;
     metadata_language_selector: boolean;
     playwright_e2e: boolean;
     clip_quality_feedback: boolean;

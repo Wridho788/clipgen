@@ -15,12 +15,14 @@ import requests
 from loguru import logger
 
 from app.config import settings
+from app.schemas import CampaignBrief
 
 
 def generate_metadata(
     transcript_text: str,
     language: str = "id",
     reference_hashtags: list[str] | None = None,
+    campaign_brief: CampaignBrief | None = None,
 ) -> dict:
     """
     Generate title, caption, dan hashtag dari transcript.
@@ -39,24 +41,28 @@ def generate_metadata(
     defaults = _default_metadata(language)
     if not transcript_text or len(transcript_text.strip()) < 10:
         logger.warning("Transcript terlalu pendek, return default metadata")
-        return _with_reference_hashtags(defaults, reference_hashtags)
+        return _apply_campaign_brief(_with_reference_hashtags(defaults, reference_hashtags), campaign_brief)
 
     try:
-        response = _call_ollama(transcript_text, language)
+        response = _call_ollama(transcript_text, language, campaign_brief)
         parsed = _parse_response(response, language)
-        return _with_reference_hashtags(parsed, reference_hashtags)
+        return _apply_campaign_brief(_with_reference_hashtags(parsed, reference_hashtags), campaign_brief)
     except Exception as e:
         logger.error(f"Metadata generation error: {e}")
         # Fallback: extract title dari first sentence
         first_sentence = transcript_text.split(".")[0][:50]
-        return _with_reference_hashtags({
+        return _apply_campaign_brief(_with_reference_hashtags({
             "title": first_sentence or defaults["title"],
             "caption": transcript_text[:100],
             "hashtags": ["content"],
-        }, reference_hashtags)
+        }, reference_hashtags), campaign_brief)
 
 
-def _call_ollama(transcript_text: str, language: str = "id") -> str:
+def _call_ollama(
+    transcript_text: str,
+    language: str = "id",
+    campaign_brief: CampaignBrief | None = None,
+) -> str:
     """Call Ollama API untuk generate metadata."""
     language = _normalize_language(language)
     if language == "en":
@@ -83,6 +89,9 @@ Berikan response dalam format JSON dengan field:
 - hashtags (list 5-7 hashtag relevan, tanpa simbol #)
 
 JSON saja, tanpa teks tambahan."""
+
+    if campaign_brief:
+        prompt += _campaign_instructions(campaign_brief, language)
 
     payload = {
         "model": settings.ollama_model,
@@ -173,6 +182,35 @@ def _with_reference_hashtags(metadata: dict, reference_hashtags: list[str] | Non
         return metadata
     merged = _normalize_hashtags([*reference_hashtags, *(metadata.get("hashtags") or [])])
     return {**metadata, "hashtags": merged[:7]}
+
+
+def _campaign_instructions(brief: CampaignBrief, language: str) -> str:
+    required_tags = ", ".join(f"#{tag}" for tag in brief.hashtags) or "tidak ada"
+    prohibited = ", ".join(brief.prohibited_terms) or "tidak ada"
+    phrases = ", ".join(brief.required_phrases) or "tidak ada"
+    cta = brief.cta or "tidak ada"
+    return f"""
+
+Campaign brief (ikuti dengan ketat):
+- Campaign: {brief.name}
+- Gaya judul: {brief.title_style}; tetap menarik tetapi tidak boleh menyesatkan.
+- CTA yang harus ada bila relevan: {cta}
+- Hashtag wajib: {required_tags}
+- Frasa wajib yang harus benar-benar ada di source: {phrases}
+- Kata/tema terlarang: {prohibited}
+- Jangan membuat klaim, kutipan, atau konteks yang tidak ada di transcript.
+Bahasa output: {"English" if language == "en" else "Bahasa Indonesia"}.
+"""
+
+
+def _apply_campaign_brief(metadata: dict, brief: CampaignBrief | None) -> dict:
+    if not brief:
+        return metadata
+    hashtags = _normalize_hashtags([*(metadata.get("hashtags") or []), *brief.hashtags])
+    caption = str(metadata.get("caption") or "").strip()
+    if brief.cta and brief.cta.casefold() not in caption.casefold():
+        caption = f"{caption.rstrip()}\n\n{brief.cta}".strip()
+    return {**metadata, "caption": caption[:500], "hashtags": hashtags[:15]}
 
 
 def test_ollama_connection() -> bool:

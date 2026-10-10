@@ -19,9 +19,7 @@ backend/app/
 │   └── pipeline/                ← processing stages (input → output)
 │       ├── audio_extract.py     ├─ video → audio (ffmpeg)
 │       ├── transcribe.py        ├─ audio → text+timestamp (Whisper)
-│       ├── highlight_detect.py  ├─ text → highlight timepoints (heuristik)
 │       ├── clip_cut.py          ├─ video+timestamp → raw clip (frame asli)
-│       ├── subtitle_burn.py     ├─ raw clip+subtitle → final clip (YouTube saja)
 │       └── metadata_gen.py      └─ text → title/caption/hashtag id/en (Ollama)
 │
 ├── services/
@@ -53,10 +51,9 @@ JobService(job_id, db_session).process()
   ├─ download YouTube source (bila URL)
   ├─ extract_audio()
   ├─ transcribe() + save to DB
-  ├─ detect_highlights()
-  └─ For each highlight:
+  ├─ plan evenly spaced clip windows
+  └─ For each clip window:
       ├─ cut_clip()
-      ├─ burn_subtitles() (hanya YouTube)
       ├─ generate_metadata(language)
       └─ Update clip in DB
 ```
@@ -362,7 +359,7 @@ export const useJobStatus = (jobId: string) => {
 | job_id | FK | refs jobs.id |
 | start_time | FLOAT | detik di video asal |
 | end_time | FLOAT | detik di video asal |
-| highlight_score | FLOAT | skor heuristik (debug) |
+| highlight_score | FLOAT | kolom legacy; tidak dipakai |
 | file_path | TEXT | path /app/storage/clips/xxx_final.mp4 |
 | title | TEXT | AI-generated atau user-edited |
 | caption | TEXT | AI-generated |
@@ -385,8 +382,8 @@ WHISPER_DEVICE=cpu       # cpu atau cuda (kalau ada GPU)
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.2    # atau llama2, mistral
 
-# Highlight
-HIGHLIGHT_TOP_N=5        # jumlah clip yang dihasilkan
+# Clip windows
+HIGHLIGHT_TOP_N=5        # target jumlah clip
 
 # Output clips keep the source frame/aspect ratio. Vertical crop is skipped.
 ```
@@ -435,7 +432,6 @@ sqlite3 backend/storage/app.db "SELECT COUNT(*) FROM jobs;"
 | "Whisper model too slow" | Model size terlalu besar | Set `WHISPER_MODEL_SIZE=tiny` |
 | "Video file not recognized" | ffmpeg error | Convert ke MP4: `ffmpeg -i input.avi -c:v libx264 output.mp4` |
 | "Frontend 404 on /api/videos/upload" | Backend not running atau CORS issue | Check `http://localhost:8000/docs` untuk test API |
-| "Subtitle burned but not visible" | Font size/color issue di ffmpeg | Edit `subtitle_burn.py` filter parameter |
 | "Database locked" | SQLite concurrent write | Don't run multiple backend instances |
 
 ---

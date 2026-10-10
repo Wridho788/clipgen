@@ -1,5 +1,7 @@
 """Video intake routes for local uploads, YouTube jobs, and ETA previews."""
+import asyncio
 import json
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -16,15 +18,18 @@ from app.core.pipeline.audio_extract import has_audio_stream
 from app.database import get_db
 from app.models import Job, User
 from app.schemas import (
+    CampaignBrief,
     JobCreateResponse,
     JobProcessingOptions,
     ProcessingEstimateResponse,
+    YouTubePreflightResponse,
     default_processing_options,
 )
 from app.services.job_dispatcher import enqueue_job
 from app.services.eta_calibration import calibrate_stage_estimates
 from app.services.media_probe import probe_video
 from app.services.processing_estimator import build_stage_estimates, total_estimate_seconds
+from app.services.youtube_access import YouTubeAccessBlocked, get_youtube_access_status, require_youtube_access
 
 router = APIRouter()
 
@@ -39,33 +44,23 @@ async def estimate_processing_time(
     metadata_language: Literal["id", "en"] | None = Query(None),
     processing_mode: Literal["automatic", "manual"] | None = Query(None),
     crop_vertical: bool | None = Query(None),
-    generate_highlights: bool | None = Query(None),
     generate_metadata: bool | None = Query(None),
-    generate_subtitles: bool | None = Query(None),
-    context_aware: bool | None = Query(None),
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Query(None),
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Query(None),
-    subtitle_style: Literal["standard", "karaoke"] | None = Query(None),
-    hook_text: str | None = Query(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Query(None),
 ):
     """Return the same conservative estimate that will be attached to a new job."""
     options = _processing_options_from_values(
-        min_clip_seconds,
-        max_clip_seconds,
-        clip_count,
-        metadata_language,
-        processing_mode,
-        crop_vertical,
-        generate_highlights,
-        generate_metadata,
-        generate_subtitles,
-        context_aware,
-        output_preset,
-        visual_style,
-        subtitle_style,
-        hook_text,
-        render_acceleration,
+        min_clip_seconds=min_clip_seconds,
+        max_clip_seconds=max_clip_seconds,
+        clip_count=clip_count,
+        metadata_language=metadata_language,
+        processing_mode=processing_mode,
+        crop_vertical=crop_vertical,
+        generate_metadata=generate_metadata,
+        output_preset=output_preset,
+        visual_style=visual_style,
+        render_acceleration=render_acceleration,
     )
     stage_estimates = build_stage_estimates(duration_seconds, source_type, options)
     return ProcessingEstimateResponse(
@@ -85,19 +80,28 @@ async def upload_video(
     metadata_language: Literal["id", "en"] | None = Form(None),
     processing_mode: Literal["automatic", "manual"] | None = Form(None),
     crop_vertical: bool | None = Form(None),
-    generate_highlights: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
-    generate_subtitles: bool | None = Form(None),
-    context_aware: bool | None = Form(None),
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Form(None),
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
-    subtitle_style: Literal["standard", "karaoke"] | None = Form(None),
-    hook_text: str | None = Form(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
+    campaign_brief_json: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Store a local video, validate its media streams, then queue processing."""
+    processing_options = _processing_options_from_values(
+        min_clip_seconds=min_clip_seconds,
+        max_clip_seconds=max_clip_seconds,
+        clip_count=clip_count,
+        metadata_language=metadata_language,
+        processing_mode=processing_mode,
+        crop_vertical=crop_vertical,
+        generate_metadata=generate_metadata,
+        output_preset=output_preset,
+        visual_style=visual_style,
+        render_acceleration=render_acceleration,
+        campaign_brief_json=campaign_brief_json,
+    )
     job_id = str(uuid.uuid4())
     file_ext = Path(file.filename).suffix if file.filename else ".mp4"
     saved_path = settings.upload_dir / f"{job_id}{file_ext}"
@@ -122,34 +126,31 @@ async def upload_video(
         logger.error(f"File save error: {error}")
         raise HTTPException(status_code=500, detail="Gagal simpan file") from error
 
-    video_info = probe_video(saved_path)
-    if not video_info:
+    try:
+        # ffprobe waits on disk and a child process. Keep both probes off the
+        # event loop so health checks and other requests can still complete.
+        video_info = await asyncio.to_thread(probe_video, saved_path)
+        if not video_info:
+            raise HTTPException(status_code=400, detail="File bukan video valid atau corrupt")
+        if processing_options.generate_metadata and not await asyncio.to_thread(has_audio_stream, saved_path):
+            raise HTTPException(
+                status_code=400,
+                detail="Video tidak punya audio track. Upload video dengan suara/speech agar bisa diproses.",
+            )
+    except subprocess.TimeoutExpired as error:
         saved_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="File bukan video valid atau corrupt")
-
-    processing_options = _processing_options_from_values(
-        min_clip_seconds,
-        max_clip_seconds,
-        clip_count,
-        metadata_language,
-        processing_mode,
-        crop_vertical,
-        generate_highlights,
-        generate_metadata,
-        generate_subtitles,
-        context_aware,
-        output_preset,
-        visual_style,
-        subtitle_style,
-        hook_text,
-        render_acceleration,
-    )
-    if (processing_options.generate_highlights or processing_options.generate_subtitles) and not has_audio_stream(saved_path):
-        saved_path.unlink(missing_ok=True)
+        logger.warning("Upload media probe timed out for {}", saved_path.name)
         raise HTTPException(
-            status_code=400,
-            detail="Video tidak punya audio track. Upload video dengan suara/speech agar bisa diproses.",
-        )
+            status_code=504,
+            detail=(
+                "File sudah diterima, tetapi pemeriksaan video/audio melewati batas waktu "
+                f"{settings.media_probe_timeout_seconds} detik. Job belum dibuat. "
+                "Coba upload ulang setelah beban server berkurang."
+            ),
+        ) from error
+    except Exception:
+        saved_path.unlink(missing_ok=True)
+        raise
 
     stage_estimates, _ = calibrate_stage_estimates(
         db,
@@ -189,15 +190,11 @@ async def process_youtube(
     metadata_language: Literal["id", "en"] | None = Form(None),
     processing_mode: Literal["automatic", "manual"] | None = Form(None),
     crop_vertical: bool | None = Form(None),
-    generate_highlights: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
-    generate_subtitles: bool | None = Form(None),
-    context_aware: bool | None = Form(None),
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = Form(None),
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
-    subtitle_style: Literal["standard", "karaoke"] | None = Form(None),
-    hook_text: str | None = Form(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
+    campaign_brief_json: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -206,22 +203,20 @@ async def process_youtube(
     if not _is_youtube_url(normalized_url):
         raise HTTPException(status_code=400, detail="URL YouTube tidak valid")
 
+    _require_youtube_access_or_raise()
+
     processing_options = _processing_options_from_values(
-        min_clip_seconds,
-        max_clip_seconds,
-        clip_count,
-        metadata_language,
-        processing_mode,
-        crop_vertical,
-        generate_highlights,
-        generate_metadata,
-        generate_subtitles,
-        context_aware,
-        output_preset,
-        visual_style,
-        subtitle_style,
-        hook_text,
-        render_acceleration,
+        min_clip_seconds=min_clip_seconds,
+        max_clip_seconds=max_clip_seconds,
+        clip_count=clip_count,
+        metadata_language=metadata_language,
+        processing_mode=processing_mode,
+        crop_vertical=crop_vertical,
+        generate_metadata=generate_metadata,
+        output_preset=output_preset,
+        visual_style=visual_style,
+        render_acceleration=render_acceleration,
+        campaign_brief_json=campaign_brief_json,
     )
     stage_estimates, _ = calibrate_stage_estimates(
         db,
@@ -245,6 +240,31 @@ async def process_youtube(
 
     await enqueue_job(job.id)
     return _job_create_response(job.id, "pending", stage_estimates)
+
+
+@router.get("/youtube/preflight", response_model=YouTubePreflightResponse)
+async def youtube_preflight(
+    current_user: User = Depends(get_current_user),
+):
+    """Expose a safe local readiness check; this never contacts YouTube."""
+    del current_user
+    return get_youtube_access_status().as_dict()
+
+
+def _require_youtube_access_or_raise() -> None:
+    try:
+        require_youtube_access()
+    except YouTubeAccessBlocked as error:
+        headers = (
+            {"Retry-After": str(error.access_status.retry_after_seconds)}
+            if error.access_status.retry_after_seconds
+            else None
+        )
+        raise HTTPException(
+            status_code=error.http_status_code,
+            detail=error.access_status.message,
+            headers=headers,
+        ) from error
 
 
 def _job_create_response(
@@ -278,33 +298,25 @@ def _processing_options_from_form(
     metadata_language: Literal["id", "en"] | None = None,
     processing_mode: Literal["automatic", "manual"] | None = None,
     crop_vertical: bool | None = None,
-    generate_highlights: bool | None = None,
     generate_metadata: bool | None = None,
-    generate_subtitles: bool | None = None,
-    context_aware: bool | None = None,
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = None,
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = None,
-    subtitle_style: Literal["standard", "karaoke"] | None = None,
-    hook_text: str | None = None,
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = None,
+    campaign_brief_json: str | None = None,
 ) -> JobProcessingOptions:
     """Backward-compatible helper used by tests and multipart endpoints."""
     return _processing_options_from_values(
-        min_clip_seconds,
-        max_clip_seconds,
-        clip_count,
-        metadata_language,
-        processing_mode,
-        crop_vertical,
-        generate_highlights,
-        generate_metadata,
-        generate_subtitles,
-        context_aware,
-        output_preset,
-        visual_style,
-        subtitle_style,
-        hook_text,
-        render_acceleration,
+        min_clip_seconds=min_clip_seconds,
+        max_clip_seconds=max_clip_seconds,
+        clip_count=clip_count,
+        metadata_language=metadata_language,
+        processing_mode=processing_mode,
+        crop_vertical=crop_vertical,
+        generate_metadata=generate_metadata,
+        output_preset=output_preset,
+        visual_style=visual_style,
+        render_acceleration=render_acceleration,
+        campaign_brief_json=campaign_brief_json,
     )
 
 
@@ -315,18 +327,15 @@ def _processing_options_from_values(
     metadata_language: Literal["id", "en"] | None,
     processing_mode: Literal["automatic", "manual"] | None = None,
     crop_vertical: bool | None = None,
-    generate_highlights: bool | None = None,
     generate_metadata: bool | None = None,
-    generate_subtitles: bool | None = None,
-    context_aware: bool | None = None,
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] | None = None,
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = None,
-    subtitle_style: Literal["standard", "karaoke"] | None = None,
-    hook_text: str | None = None,
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = None,
+    campaign_brief_json: str | None = None,
 ) -> JobProcessingOptions:
     defaults = default_processing_options().model_dump()
     try:
+        campaign_brief = _parse_campaign_brief(campaign_brief_json)
         return JobProcessingOptions.model_validate(
             {
                 "min_clip_seconds": (
@@ -351,23 +360,10 @@ def _processing_options_from_values(
                     if crop_vertical is not None
                     else defaults["crop_vertical"]
                 ),
-                "generate_highlights": (
-                    generate_highlights
-                    if generate_highlights is not None
-                    else defaults["generate_highlights"]
-                ),
                 "generate_metadata": (
                     generate_metadata
                     if generate_metadata is not None
                     else defaults["generate_metadata"]
-                ),
-                "generate_subtitles": (
-                    generate_subtitles
-                    if generate_subtitles is not None
-                    else defaults["generate_subtitles"]
-                ),
-                "context_aware": (
-                    context_aware if context_aware is not None else defaults["context_aware"]
                 ),
                 "output_preset": (
                     output_preset if output_preset is not None else defaults["output_preset"]
@@ -375,16 +371,23 @@ def _processing_options_from_values(
                 "visual_style": (
                     visual_style if visual_style is not None else defaults["visual_style"]
                 ),
-                "subtitle_style": (
-                    subtitle_style if subtitle_style is not None else defaults["subtitle_style"]
-                ),
-                "hook_text": hook_text if hook_text is not None else defaults["hook_text"],
                 "render_acceleration": (
                     render_acceleration
                     if render_acceleration is not None
                     else defaults["render_acceleration"]
                 ),
+                "campaign_brief": campaign_brief,
             }
         )
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def _parse_campaign_brief(raw_value: str | None) -> CampaignBrief | None:
+    """Parse an optional JSON brief from multipart form data."""
+    if raw_value is None or not raw_value.strip():
+        return None
+    try:
+        return CampaignBrief.model_validate(json.loads(raw_value))
+    except (json.JSONDecodeError, ValidationError) as error:
+        raise HTTPException(status_code=422, detail=f"Campaign brief tidak valid: {error}") from error

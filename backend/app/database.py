@@ -103,6 +103,13 @@ def _apply_sqlite_schema_upgrades():
                     text(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_definition}")
                 )
 
+    if "clips" not in inspector.get_table_names():
+        return
+    clip_columns = {column["name"] for column in inspector.get_columns("clips")}
+    if "analysis_json" not in clip_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE clips ADD COLUMN analysis_json TEXT"))
+
 
 def _ensure_local_owner() -> None:
     """Give legacy jobs a stable owner while local auth remains disabled."""

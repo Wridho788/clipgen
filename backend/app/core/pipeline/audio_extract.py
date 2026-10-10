@@ -7,6 +7,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from app.config import settings
+
 
 def has_audio_stream(video_path: Path) -> bool:
     """Return True kalau file video punya minimal satu audio stream."""
@@ -17,7 +19,9 @@ def has_audio_stream(video_path: Path) -> bool:
         "-of", "csv=p=0",
         str(video_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=settings.media_probe_timeout_seconds,
+    )
     return result.returncode == 0 and "audio" in result.stdout
 
 
@@ -31,7 +35,7 @@ def extract_audio(video_path: Path, output_dir: Path) -> Path:
     if not has_audio_stream(video_path):
         raise RuntimeError(
             "Video tidak punya audio track. ClipGen membutuhkan audio/speech "
-            "untuk transkripsi dan highlight detection."
+            "untuk transkripsi."
         )
 
     cmd = [

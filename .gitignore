@@ -35,3 +35,6 @@ backend/storage-restore-*/
 # OS/editor
 .DS_Store
 Thumbs.db
+
+# TypeScript incremental build cache
+*.tsbuildinfo

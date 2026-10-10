@@ -1,5 +1,5 @@
 """
-Stage 4: Potong video sesuai timestamp highlight menggunakan ffmpeg.
+Potong video sesuai jendela waktu klip menggunakan ffmpeg.
 """
 from pathlib import Path
 from typing import Callable

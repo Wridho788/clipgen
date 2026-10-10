@@ -6,6 +6,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from app.config import settings
+
 
 @dataclass(frozen=True)
 class VideoInfo:
@@ -15,7 +17,7 @@ class VideoInfo:
 
 
 def probe_video(file_path: Path) -> VideoInfo | None:
-    """Return primary video metadata, or None when ffprobe cannot read a video stream."""
+    """Return video metadata; a timeout is not evidence of a corrupt video."""
     command = [
         "ffprobe",
         "-v", "error",
@@ -25,7 +27,9 @@ def probe_video(file_path: Path) -> VideoInfo | None:
         str(file_path),
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=settings.media_probe_timeout_seconds,
+        )
         if result.returncode != 0:
             return None
         payload = json.loads(result.stdout or "{}")
@@ -45,7 +49,7 @@ def probe_video(file_path: Path) -> VideoInfo | None:
             width=_optional_int(stream.get("width")),
             height=_optional_int(stream.get("height")),
         )
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, json.JSONDecodeError) as error:
         logger.warning(f"Could not probe video {file_path}: {error}")
         return None
 

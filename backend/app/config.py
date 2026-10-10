@@ -43,18 +43,11 @@ class Settings(BaseSettings):
     cpu_transcription_rtf: float = Field(default=1.75, ge=0.1, le=10.0)
     gpu_transcription_rtf: float = Field(default=0.35, ge=0.05, le=5.0)
 
-    # --- Highlight detection thresholds ---
-    highlight_window_seconds: float = 5.0
-    # Short-form moments are scored dynamically; this is only a lower bound,
-    # not a forced 15-second output length.
+    # --- Legacy-named clip window defaults ---
     highlight_min_clip_seconds: float = 10.0
     highlight_max_clip_seconds: float = 60.0
-    # Zero means "auto" and is resolved from source duration at runtime.
+    # Zero derives the clip count from source duration.
     highlight_top_n: int = Field(default=0, ge=0, le=12)
-    automatic_youtube_intro_skip_seconds: float = 60.0
-    automatic_youtube_min_segment_gap_seconds: float = 15.0
-    automatic_youtube_intro_analysis_seconds: float = 90.0
-    automatic_youtube_intro_max_skip_seconds: float = 90.0
 
     # --- Ollama (metadata generation) ---
     ollama_base_url: str = "http://localhost:11434"
@@ -72,8 +65,19 @@ class Settings(BaseSettings):
     youtube_download_max_height: int = Field(default=720, ge=0, le=4320)
     # Optional Netscape-format cookies exported from a browser on the same
     # network.  Never put cookie contents in source control or job requests.
-    youtube_cookies_path: Path | None = None
+    # Keep this as a string so an empty docker-compose env var does not become
+    # the surprising Path('.') value; the downloader normalizes/validates it.
+    youtube_cookies_path: str | None = None
     youtube_user_agent: str | None = None
+    # A local gate prevents jobs that are known to be rejected before they
+    # reach yt-dlp. This is deliberately on by default: a missing browser
+    # session otherwise turns every pasted YouTube URL into a failed job.
+    youtube_require_cookies: bool = True
+    # A bot challenge is a signal to stop creating fresh download attempts.
+    # Repeated blocks use exponential backoff, capped here. Replacing the
+    # cookie file clears the hold automatically because its file stamp changes.
+    youtube_bot_block_cooldown_seconds: int = Field(default=1800, ge=60, le=86_400)
+    youtube_bot_block_max_cooldown_seconds: int = Field(default=28_800, ge=60, le=86_400)
 
     # --- Rendering ---
     # Always automatic. Capability detection chooses an actually usable device
@@ -88,6 +92,8 @@ class Settings(BaseSettings):
 
     # --- Upload limits ---
     max_upload_size_mb: int = 2048  # 2GB, wajar untuk video panjang personal use
+    # Windows bind mounts and busy disks can make ffprobe take over 10 seconds.
+    media_probe_timeout_seconds: int = Field(default=60, ge=10, le=300)
 
     # --- Operations ---
     log_level: str = "INFO"

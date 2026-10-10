@@ -23,12 +23,13 @@ from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
 from app.services.processing_estimator import build_stage_estimates, total_estimate_seconds
 from app.services.runtime_capabilities import get_runtime_capabilities
+from app.services.youtube_access import YouTubeAccessBlocked, require_youtube_access
 
 router = APIRouter()
 
 
 @router.get("", response_model=List[JobResponse])
-async def list_jobs(
+def list_jobs(
     status: str = None,  # filter by status
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -48,7 +49,7 @@ async def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobResponse)
-async def get_job(
+def get_job(
     job_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -115,6 +116,21 @@ async def retry_job(
             status_code=409,
             detail="File sumber sudah tidak tersedia. Upload video lagi untuk membuat job baru.",
         )
+
+    if original_job.source_type == "youtube_url" and str(original_job.source_path).startswith(("http://", "https://")):
+        try:
+            require_youtube_access()
+        except YouTubeAccessBlocked as error:
+            headers = (
+                {"Retry-After": str(error.access_status.retry_after_seconds)}
+                if error.access_status.retry_after_seconds
+                else None
+            )
+            raise HTTPException(
+                status_code=error.http_status_code,
+                detail=error.access_status.message,
+                headers=headers,
+            ) from error
 
     if data and data.processing_options:
         processing_options = data.processing_options

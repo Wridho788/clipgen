@@ -20,7 +20,7 @@ export function JobProgressBar({ job }: { job: JobResponse }) {
   }, [job.current_stage_eta_seconds, job.id, job.overall_eta_seconds, job.progress, job.status, job.updated_at]);
 
   return (
-    <section className="clipgen-panel p-4 shadow-sm">
+    <section className="clipgen-panel rounded-2xl p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <span className={`inline-flex border px-2 py-1 text-xs font-medium ${JOB_STATUS_TONES[job.status]}`}>

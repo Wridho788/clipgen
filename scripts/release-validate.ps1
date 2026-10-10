@@ -48,9 +48,6 @@ if ($release.version -ne "1.0.0") {
 if ($release.features.vertical_crop -ne $true) {
     throw "Release contract drift: vertical_crop should be true."
 }
-if ($release.features.youtube_subtitles -ne $true) {
-    throw "Release contract drift: youtube_subtitles should be true."
-}
 if ($release.features.youtube_automatic_multi_clip -ne $true) {
     throw "Release contract drift: automatic YouTube multi-clip should be enabled."
 }

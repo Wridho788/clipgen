@@ -2,6 +2,7 @@ import {
   AuthConfigResponse,
   AuthSessionResponse,
   AuthUser,
+  CampaignBrief,
   ClipFeedbackResponse,
   ClipResponse,
   ClipUpdateRequest,
@@ -10,6 +11,7 @@ import {
   JobResponse,
   JobStatus,
   ProcessingEstimateResponse,
+  YoutubePreflightResponse,
   ReleaseInfoResponse,
   SystemMetricsResponse,
   StorageClearMode,
@@ -75,6 +77,12 @@ function withAccessToken(url: string): string {
 }
 
 export const api = {
+  // --- Campaign briefs ---
+  listCampaignPresets: async (): Promise<CampaignBrief[]> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/presets`);
+    return handleResponse(response);
+  },
+
   // --- Videos ---
   uploadVideo: async (
     file: File,
@@ -101,6 +109,11 @@ export const api = {
     return handleResponse(response);
   },
 
+  getYoutubePreflight: async (): Promise<YoutubePreflightResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/videos/youtube/preflight`);
+    return handleResponse(response);
+  },
+
   getProcessingEstimate: async (
     durationSeconds: number,
     sourceType: "upload" | "youtube_url",
@@ -116,14 +129,9 @@ export const api = {
     if (options?.metadata_language) params.set("metadata_language", options.metadata_language);
     if (options?.processing_mode) params.set("processing_mode", options.processing_mode);
     if (options?.crop_vertical !== undefined) params.set("crop_vertical", String(options.crop_vertical));
-    if (options?.generate_highlights !== undefined) params.set("generate_highlights", String(options.generate_highlights));
     if (options?.generate_metadata !== undefined) params.set("generate_metadata", String(options.generate_metadata));
-    if (options?.generate_subtitles !== undefined) params.set("generate_subtitles", String(options.generate_subtitles));
-    if (options?.context_aware !== undefined) params.set("context_aware", String(options.context_aware));
     if (options?.output_preset) params.set("output_preset", options.output_preset);
     if (options?.visual_style) params.set("visual_style", options.visual_style);
-    if (options?.subtitle_style) params.set("subtitle_style", options.subtitle_style);
-    if (options?.hook_text) params.set("hook_text", options.hook_text);
     if (options?.render_acceleration) params.set("render_acceleration", options.render_acceleration);
     const response = await apiFetch(`${API_BASE_URL}/api/videos/estimate?${params.toString()}`);
     return handleResponse(response);
@@ -314,23 +322,15 @@ function appendProcessingOptions(formData: FormData, options?: Partial<JobProces
   if (options?.crop_vertical !== undefined) {
     formData.append("crop_vertical", String(options.crop_vertical));
   }
-  if (options?.generate_highlights !== undefined) {
-    formData.append("generate_highlights", String(options.generate_highlights));
-  }
   if (options?.generate_metadata !== undefined) {
     formData.append("generate_metadata", String(options.generate_metadata));
   }
-  if (options?.generate_subtitles !== undefined) {
-    formData.append("generate_subtitles", String(options.generate_subtitles));
-  }
-  if (options?.context_aware !== undefined) {
-    formData.append("context_aware", String(options.context_aware));
-  }
   if (options?.output_preset) formData.append("output_preset", options.output_preset);
   if (options?.visual_style) formData.append("visual_style", options.visual_style);
-  if (options?.subtitle_style) formData.append("subtitle_style", options.subtitle_style);
-  if (options?.hook_text) formData.append("hook_text", options.hook_text);
   if (options?.render_acceleration) formData.append("render_acceleration", options.render_acceleration);
+  if (options?.campaign_brief) {
+    formData.append("campaign_brief_json", JSON.stringify(options.campaign_brief));
+  }
 }
 
 function uploadWithProgress(
@@ -353,7 +353,9 @@ function uploadWithProgress(
         percent: Math.min(100, Math.round((event.loaded / event.total) * 100)),
       });
     };
-    request.onerror = () => reject(new Error("Koneksi upload terputus."));
+    request.onerror = () => reject(new Error(
+      "Browser tidak dapat menerima respons upload dari server. Periksa koneksi dan status server, lalu coba lagi.",
+    ));
     request.onabort = () => reject(new Error("Upload dibatalkan."));
     request.onload = () => {
       const body = request.responseText || "";

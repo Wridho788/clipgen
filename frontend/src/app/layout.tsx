@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Providers>
           <AuthGate>
             <div className="clipgen-app min-h-screen">
-              <div className="mx-auto max-w-6xl p-4 sm:p-6">{children}</div>
+              <div className="mx-auto max-w-7xl px-4 py-6 sm:px-8 sm:py-8">{children}</div>
             </div>
           </AuthGate>
         </Providers>

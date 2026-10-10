@@ -13,22 +13,21 @@ def test_upload_estimate_skips_download_subtitle_and_crop():
     assert estimates["transcribing"] > estimates["extracting"]
 
 
-def test_youtube_manual_estimate_has_download_and_subtitle_when_enabled():
+def test_youtube_manual_estimate_has_download_without_text_overlays():
     options = JobProcessingOptions(
         min_clip_seconds=15,
         max_clip_seconds=45,
         clip_count=3,
-        generate_subtitles=True,
     )
 
     estimates = build_stage_estimates(180, "youtube_url", options)
 
     assert estimates["downloading"] > 0
-    assert estimates["subtitling"] > 0
+    assert "subtitling" not in estimates
     assert total_estimate_seconds(estimates) == round(sum(estimates.values()), 1)
 
 
-def test_youtube_automatic_estimate_includes_multi_clip_detection_and_skips_subtitle():
+def test_youtube_automatic_estimate_has_clip_render_without_detection_or_subtitles():
     options = JobProcessingOptions(
         min_clip_seconds=15,
         max_clip_seconds=45,
@@ -43,5 +42,5 @@ def test_youtube_automatic_estimate_includes_multi_clip_detection_and_skips_subt
     assert "generating_metadata" in estimates
     assert "extracting" in estimates
     assert "transcribing" in estimates
-    assert "detecting" in estimates
+    assert "detecting" not in estimates
     assert "subtitling" not in estimates

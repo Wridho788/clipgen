@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.get("/metrics")
-async def get_metrics(
+def get_metrics(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -96,18 +96,12 @@ async def get_release_info():
         "features": {
             "local_upload": True,
             "youtube_url": True,
-            "upload_subtitles": True,
-            "youtube_subtitles": True,
             "vertical_crop": True,
-            "context_aware_clipping": True,
             "social_reframe": True,
-            "karaoke_subtitles": True,
-            "hook_overlay": True,
             "platform_export_presets": True,
             "gpu_render_fallback": True,
             "youtube_manual_options": True,
             "youtube_automatic_multi_clip": True,
-            "youtube_visual_intro_analysis": True,
             "metadata_language_selector": True,
             "playwright_e2e": True,
             "clip_quality_feedback": True,
@@ -161,7 +155,7 @@ async def get_storage_policy(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/performance")
-async def get_performance_baseline(
+def get_performance_baseline(
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -201,7 +195,7 @@ async def get_performance_baseline(
                 job.source_type,
                 str(options.get("output_preset", "original")),
                 str(options.get("visual_style", "clean")),
-                "subtitle" if options.get("generate_subtitles") else "no-subtitle",
+                "plain-render",
             ]
         )
         profile_row = profiles.setdefault(

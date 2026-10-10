@@ -11,6 +11,49 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.config import settings
 
 
+class CampaignBrief(BaseModel):
+    """Reusable campaign rules applied to clipping and distribution metadata."""
+
+    id: str = Field(default="custom", min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
+    name: str = Field(default="Custom campaign", min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    platforms: list[Literal["tiktok", "instagram_reels", "youtube", "facebook"]] = Field(
+        default_factory=list, max_length=8
+    )
+    min_clip_seconds: float = Field(default=15, ge=5, le=120)
+    max_clip_seconds: float = Field(default=60, ge=5, le=120)
+    hook_required: bool = True
+    hook_max_seconds: float = Field(default=3, ge=1, le=10)
+    preferred_hook_types: list[str] = Field(default_factory=list, max_length=8)
+    required_visuals: list[str] = Field(default_factory=list, max_length=12)
+    required_phrases: list[str] = Field(default_factory=list, max_length=12)
+    prohibited_terms: list[str] = Field(default_factory=list, max_length=40)
+    hashtags: list[str] = Field(default_factory=list, max_length=30)
+    mentions: list[str] = Field(default_factory=list, max_length=30)
+    cta: Optional[str] = Field(default=None, max_length=300)
+    title_style: Literal["curiosity_truthful", "direct", "brand_safe"] = "curiosity_truthful"
+    source_only: bool = True
+    organic_only: bool = False
+    avoid_misleading_edits: bool = True
+    positive_brand_tone: bool = False
+    allow_voiceover: bool = False
+    retention_lock: bool = False
+
+    @model_validator(mode="after")
+    def validate_campaign_brief(self):
+        if self.min_clip_seconds > self.max_clip_seconds:
+            raise ValueError("Durasi campaign minimum tidak boleh lebih besar dari maksimum")
+        self.preferred_hook_types = [str(value).strip() for value in self.preferred_hook_types if str(value).strip()]
+        self.required_visuals = [str(value).strip() for value in self.required_visuals if str(value).strip()]
+        self.required_phrases = [str(value).strip() for value in self.required_phrases if str(value).strip()]
+        self.prohibited_terms = [str(value).strip() for value in self.prohibited_terms if str(value).strip()]
+        self.hashtags = [str(value).replace("#", "").strip() for value in self.hashtags if str(value).strip()]
+        self.mentions = [str(value).strip() for value in self.mentions if str(value).strip()]
+        if self.cta:
+            self.cta = self.cta.strip() or None
+        return self
+
+
 class JobProcessingOptions(BaseModel):
     """Per-job processing switches tanpa mengubah default server."""
 
@@ -22,16 +65,10 @@ class JobProcessingOptions(BaseModel):
     metadata_language: Literal["id", "en"] = "id"
     processing_mode: Literal["automatic", "manual"] = "manual"
     crop_vertical: bool = False
-    generate_highlights: bool = True
     generate_metadata: bool = True
-    generate_subtitles: bool = False
-    # Contextual cues supplement audio energy so candidates can surface a
-    # joke, emotional beat, reveal, or payoff rather than only loud moments.
-    context_aware: bool = True
     output_preset: Literal["original", "tiktok", "reels", "youtube_shorts", "square", "landscape"] = "original"
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] = "clean"
-    subtitle_style: Literal["standard", "karaoke"] = "standard"
-    hook_text: Optional[str] = Field(default=None, max_length=120)
+    campaign_brief: Optional[CampaignBrief] = None
     # Kept for backwards-compatible requests; runtime always resolves this
     # automatically and exposes the actual CPU/GPU label to the user.
     render_acceleration: Literal["auto", "cpu", "gpu"] = "auto"
@@ -42,9 +79,6 @@ class JobProcessingOptions(BaseModel):
             raise ValueError("min_clip_seconds tidak boleh lebih besar dari max_clip_seconds")
         if self.processing_mode == "automatic":
             self.crop_vertical = False
-            # Highlight analysis is an explicit automatic-mode choice.  It can
-            # be skipped for a faster default-window clip while metadata and
-            # subtitles remain independently selectable.
         if self.crop_vertical and self.output_preset == "original":
             # Keep legacy requests working while routing them through the
             # newer social renderer.
@@ -55,8 +89,6 @@ class JobProcessingOptions(BaseModel):
             # There is no fixed social canvas to apply blur/split to. Preserve
             # the source aspect cleanly until a platform preset is selected.
             self.visual_style = "clean"
-        if self.hook_text:
-            self.hook_text = self.hook_text.strip() or None
         self.render_acceleration = "auto"
         return self
 
@@ -70,14 +102,10 @@ def default_processing_options() -> JobProcessingOptions:
         metadata_language=settings.metadata_default_language,
         processing_mode="manual",
         crop_vertical=False,
-        generate_highlights=True,
         generate_metadata=True,
-        generate_subtitles=False,
-        context_aware=True,
         output_preset="original",
         visual_style="clean",
-        subtitle_style="standard",
-        hook_text=None,
+        campaign_brief=None,
         render_acceleration=settings.render_acceleration,
     )
 
@@ -87,6 +115,16 @@ class JobCreateResponse(BaseModel):
     status: str
     estimated_processing_seconds: float = 0
     stage_estimates: dict[str, float] = Field(default_factory=dict)
+
+
+class YouTubePreflightResponse(BaseModel):
+    """Safe, local-only readiness result before a YouTube job is created."""
+
+    can_start: bool
+    status: Literal["ready", "cookies_missing", "cooldown"]
+    message: str
+    retry_after_seconds: int = Field(default=0, ge=0)
+    cookies_ready: bool
 
 
 class ProcessingEstimateResponse(BaseModel):
@@ -144,7 +182,6 @@ class ClipResponse(BaseModel):
     job_id: str
     start_time: float
     end_time: float
-    highlight_score: float
     file_path: Optional[str] = None
     title: Optional[str] = None
     caption: Optional[str] = None

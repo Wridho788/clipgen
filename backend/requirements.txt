@@ -20,7 +20,7 @@ faster-whisper==0.10.0
 # HTTP Client (untuk Ollama API)
 requests==2.32.5
 # `default` installs yt-dlp-ejs, required with Deno for current YouTube challenges.
-yt-dlp[default]==2026.6.9
+yt-dlp[default]==2026.8.19
 
 # Face Detection
 mediapipe==0.10.8

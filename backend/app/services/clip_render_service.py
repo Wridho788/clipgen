@@ -7,7 +7,6 @@ from loguru import logger
 
 from app.config import settings
 from app.core.pipeline.clip_cut import cut_clip
-from app.core.pipeline.subtitle_burn import burn_subtitles
 from app.core.pipeline.transcribe import Segment, Word
 from app.core.pipeline.social_render import render_social_clip
 from app.database import SessionLocal
@@ -59,15 +58,6 @@ def render_trimmed_clip(clip_id: str) -> None:
                     settings.clips_dir,
                     clip.id,
                 )
-            if options.generate_subtitles:
-                final_path = burn_subtitles(
-                    final_path,
-                    _segments(job.transcript_json),
-                    clip.id,
-                    settings.clips_dir,
-                    clip_start_time=clip.start_time,
-                )
-
             clip.file_path = str(final_path)
             clip.status = "ready"
             job.updated_at = datetime.utcnow()

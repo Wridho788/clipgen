@@ -7,6 +7,7 @@ update DB status + progress, handle error per stage.
 """
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
@@ -19,10 +20,7 @@ from app.models import Job, Clip
 from app.schemas import JobProcessingOptions, default_processing_options
 from app.core.pipeline.audio_extract import extract_audio, has_audio_stream
 from app.core.pipeline.transcribe import transcribe
-from app.core.pipeline.highlight_detect import Highlight, detect_highlights
-from app.core.pipeline.intro_analysis import analyze_youtube_intro
 from app.core.pipeline.clip_cut import cut_clip
-from app.core.pipeline.subtitle_burn import burn_subtitles
 from app.core.pipeline.metadata_gen import generate_metadata
 from app.core.pipeline.social_render import render_social_clip
 from app.services.media_probe import probe_video
@@ -30,11 +28,18 @@ from app.services.processing_estimator import build_stage_estimates
 from app.services.eta_calibration import calibrate_stage_estimates
 from app.services.clip_planning import resolve_clip_count
 from app.services.youtube_downloader import download_youtube_video
+from app.services.youtube_access import require_youtube_access
 from app.services.source_metadata import load_youtube_reference_hashtags
 
 
 class JobCancelled(Exception):
     """Raised internally when a queued/running job has been cancelled."""
+
+
+@dataclass(frozen=True)
+class ClipWindow:
+    start: float
+    end: float
 
 
 class JobService:
@@ -63,12 +68,9 @@ class JobService:
         active_stages = {
             "extracting",
             "transcribing",
-            "detecting",
             "cutting",
             "cropping",
             "downloading",
-            "analyzing_intro",
-            "subtitling",
             "generating_metadata",
         }
 
@@ -250,13 +252,17 @@ class JobService:
             except OSError as error:
                 logger.warning(f"Job {self.job_id}: failed deleting {candidate.name}: {error}")
 
-    def _create_clip_record(self, start: float, end: float, score: float) -> Clip:
+    def _create_clip_record(
+        self,
+        start: float,
+        end: float,
+    ) -> Clip:
         """Buat record clip di DB, status processing."""
         clip = Clip(
             job_id=self.job_id,
             start_time=start,
             end_time=end,
-            highlight_score=score,
+            highlight_score=0.0,
             status="processing",
         )
         self.db.add(clip)
@@ -264,65 +270,37 @@ class JobService:
         return clip
 
     def _needs_transcript(self, options: JobProcessingOptions) -> bool:
-        # Metadata quality depends on transcript context even when highlight
-        # analysis is deliberately skipped.
-        return bool(options.generate_highlights or options.generate_subtitles or options.generate_metadata)
+        return bool(options.generate_metadata)
 
-    def _default_highlights(self, options: JobProcessingOptions) -> list[Highlight]:
-        """Build a deterministic clip window when highlight generation is disabled."""
+    def _plan_clip_windows(self, options: JobProcessingOptions) -> list[ClipWindow]:
+        """Select evenly spaced windows without scoring or ranking moments."""
         duration = float(self.job.source_duration_seconds or options.max_clip_seconds)
         if duration <= 0:
             return []
-        end = min(duration, float(options.max_clip_seconds))
-        return [Highlight(start=0.0, end=max(1.0, end), score=0.5)]
+        count = min(self._resolved_clip_count(options), 12)
+        clip_duration = min(float(options.max_clip_seconds), duration / count)
+        if count <= 1:
+            starts = [0.0]
+        else:
+            last_start = max(0.0, duration - clip_duration)
+            starts = [last_start * index / (count - 1) for index in range(count)]
+        return [
+            ClipWindow(start=start, end=min(duration, start + clip_duration))
+            for start in starts
+        ]
 
     def _resolved_clip_count(self, options: JobProcessingOptions) -> int:
         return resolve_clip_count(self.job.source_duration_seconds, options.clip_count)
 
-    def _automatic_youtube_intro_skip_limit_seconds(self, options: JobProcessingOptions) -> float:
-        """Leave enough usable footage for multiple automatic candidates."""
-        if self.job.source_type != "youtube_url" or options.processing_mode != "automatic":
-            return 0.0
-
-        duration = max(0.0, float(self.job.source_duration_seconds or 0))
-        wanted_content = float(options.min_clip_seconds) * self._resolved_clip_count(options)
-        max_safe_skip = max(0.0, duration - wanted_content)
-        return min(settings.automatic_youtube_intro_max_skip_seconds, max_safe_skip)
-
-    def _analyze_automatic_youtube_intro(
-        self,
-        source_path: Path,
-        options: JobProcessingOptions,
-    ) -> tuple[float, dict[str, object]]:
-        max_safe_skip = self._automatic_youtube_intro_skip_limit_seconds(options)
-        if max_safe_skip <= 0:
-            return 0.0, {"intro_skip_seconds": 0.0, "intro_reason": "source_too_short"}
-
-        analysis = analyze_youtube_intro(
-            source_path,
-            float(self.job.source_duration_seconds or 0),
-            min(settings.automatic_youtube_intro_skip_seconds, max_safe_skip),
-            settings.automatic_youtube_intro_analysis_seconds,
-            max_safe_skip,
-        )
-        decision = {
-            **analysis.as_dict(),
-            "intro_skip_seconds": analysis.skip_seconds,
-            "target_clip_count": self._resolved_clip_count(options),
-            "landscape": True,
-            "subtitles": options.generate_subtitles,
-        }
-        return analysis.skip_seconds, decision
-
     def _clip_metadata_context(
         self,
         segments,
-        highlight: Highlight,
+        clip_window: ClipWindow,
         processing_options: JobProcessingOptions,
     ) -> str:
         clip_text = " ".join(
             s.text for s in segments
-            if s.start < highlight.end and s.end > highlight.start
+            if s.start < clip_window.end and s.end > clip_window.start
         ).strip()
         if clip_text:
             return clip_text
@@ -331,20 +309,17 @@ class JobService:
         if processing_options.metadata_language == "en":
             return (
                 f"Source video: {source_name}. "
-                f"Selected clip from {highlight.start:.0f}s to {highlight.end:.0f}s."
+                f"Selected clip from {clip_window.start:.0f}s to {clip_window.end:.0f}s."
             )
         return (
             f"Video sumber: {source_name}. "
-            f"Klip dipilih dari detik {highlight.start:.0f} sampai {highlight.end:.0f}."
+            f"Klip dibuat dari detik {clip_window.start:.0f} sampai {clip_window.end:.0f}."
         )
 
     async def process(self):
         """
-        Jalankan pipeline sesuai opsi job. Upload lokal default tetap memakai
-        transcribe/detect/metadata seperti perilaku lama, sementara YouTube
-        Automatic YouTube analysis skips the opening montage/intro when safe
-        and detects a duration-adaptive set of distinct highlights. Social
-        format, subtitles, and hook remain the job's explicit options.
+        Jalankan pipeline sesuai opsi job. Semua sumber dibagi menjadi jendela
+        klip dengan jarak merata; format sosial tetap mengikuti opsi job.
         Jika ada error di stage tertentu, set job.status=failed dan return early.
         """
         audio_path = None
@@ -354,20 +329,6 @@ class JobService:
             source_path = self._prepare_source(processing_options)
             needs_transcript = self._needs_transcript(processing_options)
             segments = []
-            automatic_intro_skip_seconds = 0.0
-
-            if (
-                self.job.source_type == "youtube_url"
-                and processing_options.processing_mode == "automatic"
-                and processing_options.generate_highlights
-            ):
-                self._update_status("analyzing_intro", progress=8)
-                automatic_intro_skip_seconds, decision = self._analyze_automatic_youtube_intro(
-                    source_path,
-                    processing_options,
-                )
-                self.job.automatic_summary_json = json.dumps(decision)
-                self.db.commit()
 
             if needs_transcript:
                 # Stage 1: Extract Audio
@@ -382,7 +343,7 @@ class JobService:
                     on_progress=self._record_transcription_heartbeat,
                     timeout_seconds=self._transcription_timeout_seconds(),
                     heartbeat_interval_seconds=settings.job_heartbeat_interval_seconds,
-                    include_word_timestamps=processing_options.generate_subtitles,
+                    include_word_timestamps=False,
                 )
                 self._ensure_not_cancelled()
                 self.job.transcript_json = json.dumps(
@@ -404,38 +365,13 @@ class JobService:
                 self.job.transcript_json = "[]"
                 self.db.commit()
 
-            if processing_options.generate_highlights:
-                # Stage 3: Detect Highlights
-                self._update_status("detecting", progress=50)
-                duration = segments[-1].end if segments else self.job.source_duration_seconds or 0
-                highlights = detect_highlights(
-                    segments,
-                    audio_path,
-                    duration,
-                    min_clip_seconds=processing_options.min_clip_seconds,
-                    max_clip_seconds=processing_options.max_clip_seconds,
-                    top_n=self._resolved_clip_count(processing_options),
-                    exclude_before_seconds=automatic_intro_skip_seconds,
-                    min_separation_seconds=(
-                        settings.automatic_youtube_min_segment_gap_seconds
-                        if processing_options.processing_mode == "automatic"
-                        else 0
-                    ),
-                    context_aware=processing_options.context_aware,
-                )
-                self._ensure_not_cancelled()
-
-                if not highlights:
-                    logger.warning(f"Job {self.job_id}: tidak ada highlight terdeteksi")
-                    highlights = []  # proceed dengan empty, jangan fail total
-            else:
-                highlights = self._default_highlights(processing_options)
-                logger.info(f"Job {self.job_id}: highlight detection skipped, using default clip window")
+            clip_windows = self._plan_clip_windows(processing_options)
+            self._ensure_not_cancelled()
 
             # Stage 4 onward: Per-clip processing
-            n_clips = len(highlights)
+            n_clips = len(clip_windows)
             if n_clips == 0:
-                self.job.warning_message = "Tidak ada highlight yang cukup kuat terdeteksi dari video ini."
+                self.job.warning_message = "Video tidak cukup panjang untuk menghasilkan klip."
                 self.db.commit()
                 self._update_status("done", progress=100)
                 logger.warning(f"Job {self.job_id}: finished dengan 0 clips")
@@ -451,20 +387,23 @@ class JobService:
                 processing_options.output_preset != "original"
                 or processing_options.visual_style != "clean"
             )
-            needs_text_overlay = bool(
-                processing_options.generate_subtitles or processing_options.hook_text
-            )
+            # Automatic jobs are designed as clean source-first exports. The
+            # explicit empty string prevents render helpers from falling back
+            # to the global watermark setting; manual jobs retain that setting.
+            watermark_text = "" if processing_options.processing_mode == "automatic" else None
             self._planned_stage_occurrences = {
                 ("cropping" if needs_social_render else "cutting"): n_clips,
-                **({"subtitling": n_clips} if needs_text_overlay else {}),
                 **({"generating_metadata": n_clips} if processing_options.generate_metadata else {}),
             }
-            for clip_idx, highlight in enumerate(highlights):
+            for clip_idx, clip_window in enumerate(clip_windows):
                 clip = None
                 try:
                     self._ensure_not_cancelled()
                     # Create clip record
-                    clip = self._create_clip_record(highlight.start, highlight.end, highlight.score)
+                    clip = self._create_clip_record(
+                        clip_window.start,
+                        clip_window.end,
+                    )
 
                     if needs_social_render:
                         # One FFmpeg pass: seek/cut + social reframe + final encode.
@@ -476,40 +415,25 @@ class JobService:
                             output_preset=processing_options.output_preset,
                             visual_style=processing_options.visual_style,
                             acceleration=processing_options.render_acceleration,
-                            start_time=highlight.start,
-                            end_time=highlight.end,
+                            start_time=clip_window.start,
+                            end_time=clip_window.end,
                             on_heartbeat=self._record_stage_heartbeat,
                             heartbeat_seconds=settings.job_heartbeat_interval_seconds,
+                            watermark_text=watermark_text,
                         )
                         self._ensure_not_cancelled()
                     else:
                         self._update_status("cutting")
                         final_clip_path = cut_clip(
                             source_path,
-                            highlight.start,
-                            highlight.end,
+                            clip_window.start,
+                            clip_window.end,
                             settings.clips_dir,
                             clip.id,
                             processing_options.render_acceleration,
                             on_heartbeat=self._record_stage_heartbeat,
                             heartbeat_seconds=settings.job_heartbeat_interval_seconds,
-                        )
-                        self._ensure_not_cancelled()
-
-                    if needs_text_overlay:
-                        self._update_status("subtitling")
-                        final_clip_path = burn_subtitles(
-                            final_clip_path,
-                            segments,
-                            clip.id,
-                            settings.clips_dir,
-                            clip_start_time=highlight.start,
-                            include_subtitles=processing_options.generate_subtitles,
-                            subtitle_style=processing_options.subtitle_style,
-                            hook_text=processing_options.hook_text,
-                            acceleration=processing_options.render_acceleration,
-                            on_heartbeat=self._record_stage_heartbeat,
-                            heartbeat_seconds=settings.job_heartbeat_interval_seconds,
+                            watermark_text=watermark_text,
                         )
                         self._ensure_not_cancelled()
 
@@ -518,13 +442,14 @@ class JobService:
                         self._update_status("generating_metadata")
                         metadata_context = self._clip_metadata_context(
                             segments,
-                            highlight,
+                            clip_window,
                             processing_options,
                         )
                         metadata = generate_metadata(
                             metadata_context,
                             processing_options.metadata_language,
                             source_reference_hashtags,
+                            processing_options.campaign_brief,
                         )
                         self._ensure_not_cancelled()
 
@@ -589,6 +514,10 @@ class JobService:
         stored_source = self.job.source_path
         source_path = Path(stored_source)
         if self.job.source_type == "youtube_url" and stored_source.startswith(("http://", "https://")):
+            # Repeat the submission gate immediately before yt-dlp in case a
+            # previous queued job received a bot block while this one waited.
+            # This performs no outbound request when access is on cooldown.
+            require_youtube_access()
             self._update_status("downloading", progress=5)
             source_path = download_youtube_video(
                 self.job.source_path,

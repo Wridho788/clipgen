@@ -1,6 +1,6 @@
 # ClipGen
 
-Personal AI Video Assistant untuk membuat highlight clips dari upload video lokal
+Personal AI Video Assistant untuk membuat clips dari upload video lokal
 atau URL YouTube. ClipGen adalah V1 lokal: backend FastAPI,
 frontend Next.js, SQLite storage, ffmpeg/faster-whisper untuk pipeline video,
 dan Ollama untuk metadata title/caption/hashtags.
@@ -14,11 +14,10 @@ dan Ollama untuk metadata title/caption/hashtags.
 
 ## Features
 
-- Upload video lokal dan proses jadi beberapa highlight clip.
+- Upload video lokal dan proses menjadi beberapa klip.
 - Queue job dengan progress, ETA per stage, dan ETA keseluruhan.
 - YouTube URL support dengan stage download asynchronous.
-- Mode YouTube otomatis membuat beberapa kandidat klip, melewati intro/montage awal, dan menjaga hasil landscape tanpa subtitle.
-- Subtitle hanya untuk job YouTube.
+- Mode YouTube otomatis membuat beberapa klip dengan jarak merata sepanjang video.
 - Upload lokal mempertahankan frame/aspect ratio sumber.
 - Metadata bisa dipilih Bahasa Indonesia atau English.
 - Preview, edit metadata, trim timestamp, feedback relevansi, copy caption, download clip, dan export semua clip ZIP.
@@ -56,8 +55,17 @@ ollama list
 ollama pull gemma3:4b
 ```
 
-Jika Ollama belum running, metadata generation akan fallback, tetapi pipeline video
-tetap bisa berjalan.
+Untuk ranking klip berbasis makna yang lebih kuat, gunakan model terpisah yang
+masih masuk akal untuk perangkat lokal:
+
+```powershell
+ollama pull qwen3:8b
+```
+
+ClipGen hanya mengirim 8–24 kandidat transcript terbaik ke Ollama dalam satu
+request; seluruh podcast tidak dimasukkan ke prompt. Bila Ollama belum running,
+model belum di-pull, atau responsnya tidak valid, metadata dan ranking klip akan
+fallback tanpa menggagalkan render video.
 
 ## Validation
 
@@ -128,6 +136,25 @@ Retention source dan hasil clip default-nya `0`, artinya tidak pernah dihapus ot
 
 ## Tuning Download YouTube
 
+Dengan `YOUTUBE_REQUIRE_COOKIES=true` (default), file cookies Netscape harus
+tersedia sebelum job YouTube bisa dibuat. Untuk Docker Compose:
+
+1. Simpan file cookies yang diekspor dari browser Anda di
+   `backend/storage/secrets/youtube-cookies.txt`. Jangan commit atau membagikan isinya.
+2. Atur `.env`: `YOUTUBE_COOKIES_PATH=/app/storage/secrets/youtube-cookies.txt`.
+   Path ini adalah lokasi **di dalam container**, bukan path Windows.
+3. Jika variabel lingkungan berubah, terapkan dengan `docker compose up -d backend`
+   saat tidak ada job aktif. Jika path sudah benar dan hanya file yang ditambahkan
+   atau diganti, cukup klik **Periksa ulang** pada tab YouTube tanpa restart.
+
+Preflight hanya mengecek keberadaan file lokal dan cooldown; status siap belum
+menjamin cookies masih diterima YouTube. Tidak perlu mematikan pemeriksaan cookies
+untuk mengatasi file yang belum tersedia.
+
+Upload lokal memakai `MEDIA_PROBE_TIMEOUT_SECONDS=60` per pemeriksaan video/audio.
+Pemeriksaan berjalan di luar event loop API. Jika masih timeout, respons menjelaskan
+kegagalan pemeriksaan, job tidak dibuat, dan file upload percobaan tersebut dibersihkan.
+
 Stage unduh berjalan dari backend/container ke YouTube, sehingga kecepatan ditentukan oleh koneksi server dan pembatasan CDN YouTube, bukan koneksi browser pengguna. Default baru mengunduh empat fragmen sekaligus dan memilih sumber maksimum 720p.
 
 - `YOUTUBE_DOWNLOAD_CONCURRENT_FRAGMENTS=4`: naikkan bertahap sampai `8` bila koneksi server masih longgar dan YouTube tidak melakukan throttling.
@@ -135,9 +162,9 @@ Stage unduh berjalan dari backend/container ke YouTube, sehingga kecepatan diten
 
 ## Workflow Short-form
 
-Pilih format TikTok, Reels, YouTube Shorts (9:16), square (1:1), atau landscape (16:9), lalu pilih blur background, crop, zoom, atau split screen. Job otomatis menghasilkan beberapa kandidat dari sinyal konteks transkrip—humor, emosi, tensi, dan payoff—serta energi audio. Ini merupakan ranking berbasis sinyal, bukan jaminan prediksi viral.
+Pilih format TikTok, Reels, YouTube Shorts (9:16), square (1:1), atau landscape (16:9), lalu pilih blur background, crop, zoom, atau split screen. Job otomatis pertama-tama membuat kandidat dari energi audio dan cue transcript, lalu membandingkan kandidat tersebut dengan Ollama memakai enam dimensi: hook, alur mandiri, emosi, spesifik, bisa dikutip, dan potensi diskusi. Alasan dan skornya tersimpan di tiap klip agar hasilnya bisa direview. Ini tetap ranking editorial, bukan jaminan prediksi viral.
 
-Caption karaoke memakai timestamp per kata dari Whisper dan menyediakan hook overlay opsional di awal klip. Set `RENDER_ACCELERATION=auto` untuk memakai NVENC bila ffmpeg dan GPU NVIDIA tersedia; render otomatis beralih ke CPU bila tidak. Pada Docker, GPU juga harus diekspos ke container melalui runtime NVIDIA.
+Set `RENDER_ACCELERATION=auto` untuk memakai NVENC bila ffmpeg dan GPU NVIDIA tersedia; render otomatis beralih ke CPU bila tidak. Pada Docker, GPU juga harus diekspos ke container melalui runtime NVIDIA.
 
 Untuk video panjang pada CPU, default transkripsi memakai `WHISPER_BEAM_SIZE=3`, `WHISPER_VAD_FILTER=true`, dan `TRANSCRIPTION_TIMEOUT_MULTIPLIER=4.0`. Nilai terakhir mempertahankan hard stop tetapi menghindari penghentian terlalu dini ketika CPU lebih lambat dari ETA. Jangan set `WHISPER_DEVICE=cuda` hanya karena NVENC tersedia: CUDA harus terdeteksi oleh CTranslate2 di dalam container.
 

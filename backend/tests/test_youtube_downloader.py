@@ -6,6 +6,13 @@ from app.services import youtube_downloader
 from app.services.youtube_downloader import YouTubeDownloadError, download_youtube_video
 
 
+@pytest.fixture(autouse=True)
+def isolate_youtube_access_gate(monkeypatch):
+    """Downloader unit tests never write a real browser-access state file."""
+    monkeypatch.setattr(youtube_downloader, "clear_youtube_bot_block", lambda: None)
+    monkeypatch.setattr(youtube_downloader, "record_youtube_bot_block", lambda **_kwargs: None)
+
+
 def test_download_retries_with_documented_client_for_precondition_failure(monkeypatch, tmp_path):
     commands = []
     output_file = tmp_path / "job-1.mp4"
@@ -28,6 +35,7 @@ def test_download_retries_with_documented_client_for_precondition_failure(monkey
     assert "--write-info-json" in commands[0]
     assert "--js-runtimes" in commands[0]
     assert "deno" in commands[0]
+    assert "--no-update" in commands[0]
     assert "--extractor-args" in commands[1]
     assert "youtube:player_client=default,-visionos" in commands[1]
 
@@ -96,6 +104,70 @@ def test_download_returns_friendly_error_without_unrelated_fallback(monkeypatch,
         download_youtube_video("https://youtu.be/example", tmp_path, "job-2", 30)
 
     assert len(commands) == 1
+
+
+def test_download_stops_on_youtube_bot_block_without_cookies(monkeypatch, tmp_path):
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(
+            returncode=1,
+            stderr=(
+                "ERROR: unable to download video data: HTTP Error 429: Too Many Requests\n"
+                "ERROR: Sign in to confirm you’re not a bot"
+            ),
+            stdout="",
+        )
+
+    monkeypatch.setattr(youtube_downloader.subprocess, "run", fake_run)
+
+    with pytest.raises(YouTubeDownloadError, match="HTTP 429") as error:
+        download_youtube_video("https://youtu.be/example", tmp_path, "job-bot", 30)
+
+    assert "memblokir" in str(error.value)
+    # Do not hammer YouTube with the remaining playback-client fallbacks.
+    assert len(commands) == 1
+
+
+def test_download_stops_after_bot_block_even_when_cookie_was_supplied(monkeypatch, tmp_path):
+    commands = []
+    recorded_cookie_paths = []
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(
+            returncode=1,
+            stderr="ERROR: Sign in to confirm you’re not a bot",
+            stdout="",
+        )
+
+    monkeypatch.setattr(youtube_downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        youtube_downloader,
+        "record_youtube_bot_block",
+        lambda **kwargs: recorded_cookie_paths.append(kwargs.get("cookies_path")),
+    )
+
+    with pytest.raises(YouTubeDownloadError, match="HTTP 429"):
+        download_youtube_video(
+            "https://youtu.be/example",
+            tmp_path,
+            "job-bot-cookie",
+            30,
+            cookies_path=cookie_file,
+        )
+
+    assert len(commands) == 1
+    assert recorded_cookie_paths == [cookie_file]
+
+
+def test_empty_cookie_path_is_treated_as_unconfigured(tmp_path):
+    assert youtube_downloader._usable_cookie_file("") is None
+    assert youtube_downloader._usable_cookie_file(".") is None
+    assert youtube_downloader._usable_cookie_file(tmp_path / "missing.txt") is None
 
 
 def test_download_can_keep_best_available_quality(monkeypatch, tmp_path):

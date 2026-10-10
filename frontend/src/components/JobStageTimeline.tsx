@@ -8,13 +8,10 @@ import { useNow } from "@/hooks/useNow";
 
 const STAGE_ORDER: JobStatus[] = [
   "downloading",
-  "analyzing_intro",
   "extracting",
   "transcribing",
-  "detecting",
   "cutting",
   "cropping",
-  "subtitling",
   "generating_metadata",
 ];
 
@@ -33,7 +30,7 @@ export function JobStageTimeline({ job }: { job: JobResponse }) {
   }, [job.current_stage_eta_seconds, job.id, job.progress, job.status, job.updated_at]);
 
   return (
-    <section className="clipgen-panel p-4 shadow-sm">
+    <section className="clipgen-panel rounded-2xl p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipeline</h2>
         <span className="text-xs text-slate-500 dark:text-slate-400">Aktivitas {new Date(activityAt).toLocaleTimeString("id-ID")}</span>
@@ -93,7 +90,6 @@ function getStages(job: JobResponse): JobStatus[] {
       ...(job.source_type === "youtube_url" ? (["downloading"] as JobStatus[]) : []),
       "extracting",
       "transcribing",
-      "detecting",
       "cutting",
       "generating_metadata",
       "done",

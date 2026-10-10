@@ -2,6 +2,7 @@ import pytest
 
 from app.core.pipeline import metadata_gen
 from app.core.pipeline.metadata_gen import _normalize_hashtags, _parse_response
+from app.schemas import CampaignBrief
 
 
 @pytest.mark.parametrize(
@@ -75,3 +76,12 @@ def test_english_prompt_and_default_metadata(monkeypatch):
 
     assert "in English" in captured["prompt"]
     assert metadata_gen.generate_metadata("short", "en")["title"] == "Interesting Video"
+
+
+def test_campaign_brief_adds_required_metadata_constraints(monkeypatch):
+    brief = CampaignBrief(id="yava", name="YAVA", hashtags=["YAVA"], cta="Klik keranjang kuning")
+    monkeypatch.setattr(metadata_gen, "_call_ollama", lambda *args, **kwargs: '{"title":"A","caption":"Caption","hashtags":[]}')
+    metadata = metadata_gen.generate_metadata("Transcript yang cukup panjang untuk diuji", campaign_brief=brief)
+
+    assert "YAVA" in metadata["hashtags"]
+    assert "Klik keranjang kuning" in metadata["caption"]

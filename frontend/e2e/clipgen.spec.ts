@@ -3,6 +3,35 @@ import { expect, Page, Route, test } from "@playwright/test";
 const now = "2026-08-08T10:00:00.000Z";
 
 test.describe("ClipGen browser QA", () => {
+  test("shows the server media timeout instead of a disconnected upload", async ({ page }) => {
+    await mockApi(page, {});
+    const detail = "File sudah diterima, tetapi pemeriksaan video/audio melewati batas waktu 60 detik. Job belum dibuat.";
+    await page.route("**/api/videos/upload", (route) => route.fulfill({
+      status: 504,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({ detail }),
+    }));
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "video.mp4", mimeType: "video/mp4", buffer: Buffer.from("test upload"),
+    });
+    await expect(page.getByText(detail, { exact: true })).toBeVisible();
+    await expect(page.getByText("Koneksi upload terputus.", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Pilih video" })).toBeEnabled();
+  });
+
+  test("explains an upload network failure without assuming the cause", async ({ page }) => {
+    await mockApi(page, {});
+    await page.route("**/api/videos/upload", (route) => route.abort("failed"));
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "video.mp4", mimeType: "video/mp4", buffer: Buffer.from("test upload"),
+    });
+    await expect(page.getByText("Browser tidak dapat menerima respons upload dari server.", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pilih video" })).toBeEnabled();
+  });
+
   test("queues a YouTube automatic job with lightweight defaults", async ({ page }) => {
     let receivedYoutubePost = "";
     const apiEvents: string[] = [];
@@ -30,10 +59,8 @@ test.describe("ClipGen browser QA", () => {
           progress: 5,
           stage_estimates: {
             downloading: 45,
-            analyzing_intro: 5,
             extracting: 10,
             transcribing: 60,
-            detecting: 8,
             cutting: 20,
             generating_metadata: 10,
           },
@@ -47,14 +74,14 @@ test.describe("ClipGen browser QA", () => {
           job_id: "yt-job-1",
           status: "pending",
           estimated_processing_seconds: 120,
-          stage_estimates: { downloading: 45, analyzing_intro: 5, extracting: 10, transcribing: 60, detecting: 8, cutting: 20, generating_metadata: 10 },
+          stage_estimates: { downloading: 45, extracting: 10, transcribing: 60, cutting: 20, generating_metadata: 10 },
         };
       },
     });
 
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "ClipGen" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Bikin klip yang siap publish." })).toBeVisible();
     await expect(page.getByText("v1.0.0")).toBeVisible();
     await expect(page.getByText("Worker")).toBeVisible();
     await expect(page.getByRole("button", { name: "Pilih video" })).toBeVisible();
@@ -75,12 +102,11 @@ test.describe("ClipGen browser QA", () => {
     await expect(page.getByText("Mengunduh YouTube").first()).toBeVisible();
     expect(receivedYoutubePost).toContain("en");
     expect(receivedYoutubePost).toContain("automatic");
-    expect(receivedYoutubePost).toContain("generate_highlights");
-    expect(receivedYoutubePost).toContain("true");
     expect(receivedYoutubePost).toContain("generate_metadata");
     expect(receivedYoutubePost).toContain("true");
-    expect(receivedYoutubePost).toContain("generate_subtitles");
-    await expect(page.getByText("Analisis intro video")).toBeVisible();
+    expect(receivedYoutubePost).not.toContain("generate_highlights");
+    expect(receivedYoutubePost).not.toContain("generate_subtitles");
+    await expect(page.getByText("Analisis intro video")).toHaveCount(0);
   });
 
   test("queues a YouTube manual job with selected processing options", async ({ page }) => {
@@ -96,10 +122,8 @@ test.describe("ClipGen browser QA", () => {
             downloading: 45,
             extracting: 5,
             transcribing: 30,
-            detecting: 5,
             cutting: 20,
             cropping: 20,
-            subtitling: 15,
             generating_metadata: 10,
           },
         };
@@ -116,13 +140,66 @@ test.describe("ClipGen browser QA", () => {
     await expect.poll(() => receivedYoutubePost).toContain("manual");
     expect(receivedYoutubePost).toContain("visual_style");
     expect(receivedYoutubePost).toContain("crop");
-    expect(receivedYoutubePost).toContain("generate_highlights");
     expect(receivedYoutubePost).toContain("generate_metadata");
-    expect(receivedYoutubePost).toContain("generate_subtitles");
+    expect(receivedYoutubePost).not.toContain("generate_highlights");
+    expect(receivedYoutubePost).not.toContain("generate_subtitles");
     await expect(page).toHaveURL(/\/jobs\/yt-manual-1$/, { timeout: 20_000 });
   });
 
-  test("shows upload job results without crop or subtitle stages and edits clip metadata", async ({ page }) => {
+  test("does not create a YouTube job while the local access gate is blocked", async ({ page }) => {
+    let youtubePosts = 0;
+    await mockApi(page, {
+      youtubePreflight: {
+        can_start: false,
+        status: "cookies_missing",
+        message: "Sesi YouTube belum siap. Simpan cookies Netscape yang fresh.",
+        retry_after_seconds: 0,
+        cookies_ready: false,
+      },
+      onYoutubePost: () => {
+        youtubePosts += 1;
+        return {};
+      },
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "YouTube" }).click();
+    await expect(page.getByRole("status")).toContainText("YouTube belum siap");
+    await expect(page.getByRole("status")).toContainText("cookies Netscape");
+    await page.getByPlaceholder("https://youtube.com/watch?v=...").fill("https://youtu.be/blocked");
+    await expect(page.getByRole("button", { name: "Proses" })).toBeDisabled();
+    expect(youtubePosts).toBe(0);
+  });
+
+  test("requires an explicit confirmation before resetting the workspace", async ({ page }) => {
+    let resetCalls = 0;
+    await mockApi(page, {
+      onStorageClear: () => {
+        resetCalls += 1;
+        return {
+          mode: "permanent",
+          files_handled: 4,
+          bytes_moved: 0,
+          bytes_reclaimed: 1024,
+          jobs_deleted: 2,
+          clips_deleted: 3,
+          recycle_path: null,
+        };
+      },
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Reset workspace" }).click();
+    await expect(page.getByRole("dialog", { name: "Reset workspace" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Hapus semua data & job" })).toBeDisabled();
+    await page.getByLabel(/Ketik HAPUS SEMUA/i).fill("HAPUS SEMUA");
+    await page.getByRole("button", { name: "Hapus semua data & job" }).click();
+
+    await expect.poll(() => resetCalls).toBe(1);
+    await expect(page.getByRole("status")).toContainText("2 job, 3 klip");
+  });
+
+  test("shows upload job results without highlight or subtitle stages and edits clip metadata", async ({ page }) => {
     let clipTitle = "Moment Test";
     await mockApi(page, {
       jobById: {
@@ -135,14 +212,12 @@ test.describe("ClipGen browser QA", () => {
           stage_metrics: {
             extracting: 3,
             transcribing: 14,
-            detecting: 2,
             cutting: 5,
             generating_metadata: 6,
           },
           stage_estimates: {
             extracting: 4,
             transcribing: 20,
-            detecting: 5,
             cutting: 8,
             generating_metadata: 10,
           },
@@ -157,6 +232,7 @@ test.describe("ClipGen browser QA", () => {
             caption: "Caption awal",
             hashtags: JSON.stringify(["clipgen", "qa"]),
           }),
+          clipFixture({ id: "clip-2", job_id: "done-job-1", title: "Moment Kedua" }),
         ],
       },
       onClipPatch: async (route) => {
@@ -170,7 +246,10 @@ test.describe("ClipGen browser QA", () => {
 
     await expect(page.getByText("Selesai").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Klip" })).toBeVisible();
-    await expect(page.getByText("Moment Test")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pilih Moment Test" })).toBeVisible();
+    await page.getByRole("button", { name: "Pilih Moment Kedua" }).click();
+    await expect(page.getByText("Editor klip")).toBeVisible();
+    await page.getByRole("button", { name: "Pilih Moment Test" }).click();
     await expect(page.getByText("Crop vertical")).toHaveCount(0);
     await expect(page.getByText("Subtitle")).toHaveCount(0);
 
@@ -180,7 +259,7 @@ test.describe("ClipGen browser QA", () => {
     await page.getByPlaceholder("hashtag1 hashtag2").fill("qa sprint3");
     await page.getByRole("button", { name: "Simpan" }).click();
 
-    await expect(page.getByText("Moment QA Final")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pilih Moment QA Final" })).toBeVisible();
     await page.getByRole("button", { name: "Klip relevan" }).click();
     await expect(page.getByRole("button", { name: "Klip relevan" })).toHaveAttribute("aria-pressed", "true");
 
@@ -194,7 +273,9 @@ type MockApiOptions = {
   jobById?: Record<string, unknown>;
   clipsByJob?: Record<string, unknown[] | (() => unknown[])>;
   onYoutubePost?: (postData: string) => unknown;
+  youtubePreflight?: unknown;
   onClipPatch?: (route: Route) => Promise<void>;
+  onStorageClear?: () => unknown;
 };
 
 async function mockApi(page: Page, options: MockApiOptions) {
@@ -230,6 +311,30 @@ async function mockApi(page: Page, options: MockApiOptions) {
 
     if (method === "GET" && path === "/api/system/release") {
       await json(route, releaseInfoFixture());
+      return;
+    }
+
+    if (method === "GET" && path === "/api/videos/youtube/preflight") {
+      await json(route, options.youtubePreflight || {
+        can_start: true,
+        status: "ready",
+        message: "Sesi YouTube lokal siap.",
+        retry_after_seconds: 0,
+        cookies_ready: true,
+      });
+      return;
+    }
+
+    if (method === "POST" && path === "/api/system/storage/clear") {
+      await json(route, options.onStorageClear?.() || {
+        mode: "permanent",
+        files_handled: 0,
+        bytes_moved: 0,
+        bytes_reclaimed: 0,
+        jobs_deleted: 0,
+        clips_deleted: 0,
+        recycle_path: null,
+      });
       return;
     }
 
@@ -277,7 +382,7 @@ async function mockApi(page: Page, options: MockApiOptions) {
       return;
     }
 
-    if (method === "GET" && path === "/api/clips/clip-1/preview") {
+    if (method === "GET" && /^\/api\/clips\/[^/]+\/preview$/.test(path)) {
       await route.fulfill({
         status: 200,
         headers: corsHeaders("video/mp4"),
@@ -326,14 +431,9 @@ function jobFixture(overrides: Record<string, unknown> = {}) {
       metadata_language: "id",
       processing_mode: "manual",
       crop_vertical: false,
-      generate_highlights: true,
       generate_metadata: true,
-      generate_subtitles: false,
-      context_aware: true,
       output_preset: "original",
       visual_style: "clean",
-      subtitle_style: "standard",
-      hook_text: null,
       render_acceleration: "auto",
     }),
     parent_job_id: null,
@@ -349,7 +449,6 @@ function jobFixture(overrides: Record<string, unknown> = {}) {
     stage_estimates: {
       extracting: 4,
       transcribing: 20,
-      detecting: 5,
       cutting: 8,
       generating_metadata: 10,
     },
@@ -372,7 +471,6 @@ function clipFixture(overrides: Record<string, unknown> = {}) {
     job_id: "job-1",
     start_time: 5,
     end_time: 25,
-    highlight_score: 0.93,
     file_path: "/app/storage/clips/clip-1.mp4",
     title: "Moment Test",
     caption: "Caption test",
@@ -432,12 +530,9 @@ function releaseInfoFixture() {
     features: {
       local_upload: true,
       youtube_url: true,
-      upload_subtitles: false,
-      youtube_subtitles: true,
       vertical_crop: true,
       youtube_manual_options: true,
       youtube_automatic_multi_clip: true,
-      youtube_visual_intro_analysis: true,
       metadata_language_selector: true,
       playwright_e2e: true,
       clip_quality_feedback: true,
