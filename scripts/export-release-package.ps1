@@ -15,21 +15,15 @@ New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
 
 $files = @(
     "README.md",
-    "RELEASE_NOTES.md",
-    "RELEASE_CHECKLIST.md",
-    "SPRINT4_RELEASE_READINESS.md",
-    "SPRINT3_QA_CHECKLIST.md",
-    "ARCHITECTURE.md",
-    "SYSTEM_OVERVIEW.md",
-    "BACKEND_SETUP.md",
-    "FRONTEND_INTEGRATION.md",
     "docker-compose.yml",
     ".env.example"
-)
+) + (Get-ChildItem -Path "docs" -Filter "*.md" | ForEach-Object { "docs/$($_.Name)" }) + @("docs/eval/README.md")
 
 foreach ($file in $files) {
     if (Test-Path -LiteralPath $file) {
         Copy-Item -LiteralPath $file -Destination $docsDir
+    } else {
+        Write-Warning "Release document not found: $file"
     }
 }
 
@@ -39,7 +33,7 @@ $manifest = [ordered]@{
     created_at = (Get-Date).ToString("o")
     backend_url = "http://localhost:8000"
     frontend_url = "http://localhost:3001"
-    validation_command = ".\scripts\release-validate.ps1 -SkipPlaywrightInstall"
+    validation_command = ".\scripts\release-validate.ps1 -SkipPlaywrightInstall -RunRealE2E"
     backup_command = ".\scripts\backup-storage.ps1"
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $packageDir "manifest.json")

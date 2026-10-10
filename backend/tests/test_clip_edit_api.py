@@ -11,7 +11,7 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.main import app
 from app.models import Base, Clip, Job, User
-from tests.asgi_client import call
+from asgi_client import call  # tests/ is on sys.path (pytest prepend import mode)
 
 
 @pytest.fixture

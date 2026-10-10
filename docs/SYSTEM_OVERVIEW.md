@@ -339,6 +339,10 @@ export const useJobStatus = (jobId: string) => {
 
 ## 5. Database Schema
 
+> Superseded for clips: schema migration 2 added candidate review, the
+> canonical edit document, and render diagnostics. See
+> `08-repository-audit.md` §4 and `backend/app/models.py`.
+
 **jobs table:**
 | Field | Type | Notes |
 |---|---|---|

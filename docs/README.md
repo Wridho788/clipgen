@@ -3,10 +3,9 @@
 **Purpose:** Product and engineering blueprint for a major ClipGen
 overhaul, using a local-first development and processing strategy.
 
-**Status:** Proposed blueprint. This is not a codebase audit. Current
-stack, existing modules, actual performance, and current feature
-completeness must be verified against the repository before
-implementation.
+**Status:** `01`–`07` are the target specification (not a codebase
+audit). The repository audit, baseline, and implementation results are in
+`08`–`10`.
 
 ## Documents
 
@@ -24,6 +23,20 @@ implementation.
     gates and investment criteria.
 7.  `07-decisions-and-open-questions.md` --- assumptions, decisions to
     defer, repository audit checklist.
+
+Results of applying the pack to this repository:
+
+8.  `08-repository-audit.md` --- audit against the 07 §3 checklist,
+    keep/refactor/replace inventory, post-audit decisions, data mapping.
+9.  `09-baseline-report.md` --- processing time, boundary quality,
+    transcript issues, export validation/parity measurements.
+10. `10-implementation-notes.md` --- what was implemented per work item,
+    candidate algorithm, policies, quality gates, known limitations.
+11. `eval/README.md` --- labeling kit and `scripts/eval_report.py` usage.
+
+Operational runbooks: `V1_PERFORMANCE_AND_RELIABILITY_RUNBOOK.md`,
+`CAMPAIGN_BRIEF_RUNBOOK.md`, `SYSTEM_OVERVIEW.md` (deployment and API
+flow; the data model section is superseded by `08` §4).
 
 ## How to use this pack
 

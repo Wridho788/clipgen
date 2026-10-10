@@ -177,7 +177,7 @@ test.describe("Clip editor", () => {
     // Captions: correct the first cue and switch to a yellow box style.
     await page.getByRole("tab", { name: "Caption" }).click();
     await expect(page.getByText("di luar trim", { exact: true })).toBeVisible();
-    const firstCue = page.getByLabel("Teks caption 1");
+    const firstCue = page.getByLabel("Teks caption 1", { exact: true });
     await firstCue.fill("So here is THE question");
     await firstCue.blur();
     await page.getByLabel("Latar").selectOption("box");
@@ -191,7 +191,7 @@ test.describe("Clip editor", () => {
     await expect(page.getByText("dikoreksi", { exact: true })).toBeVisible();
 
     // Preview overlay shows the corrected text at that cue's time.
-    await page.getByRole("button", { name: "Putar caption 1" }).click();
+    await page.getByRole("button", { name: "Putar caption 1", exact: true }).click();
     await expect(page.getByTestId("caption-overlay")).toHaveText("So here is THE question");
     await expect(page.getByTestId("caption-overlay")).toHaveCSS("color", "rgb(255, 225, 77)");
 

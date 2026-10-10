@@ -1,7 +1,9 @@
 param(
     [int]$FrontendPort = 3001,
     [string]$BackendUrl = "http://localhost:8000",
-    [switch]$SkipPlaywrightInstall
+    [switch]$SkipPlaywrightInstall,
+    # Real Whisper/FFmpeg/Ollama workflow (several minutes): scripts/e2e_real.py
+    [switch]$RunRealE2E
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,16 +17,22 @@ function Assert-File {
     }
 }
 
-Write-Host "Running Sprint 4 release validation..." -ForegroundColor Cyan
+Write-Host "Running release validation..." -ForegroundColor Cyan
 
 Assert-File "README.md"
-Assert-File "RELEASE_NOTES.md"
-Assert-File "RELEASE_CHECKLIST.md"
-Assert-File "SPRINT4_RELEASE_READINESS.md"
-Assert-File "SPRINT3_QA_CHECKLIST.md"
+Assert-File "docs/README.md"
+foreach ($doc in @(
+    "01-product-requirements.md", "02-local-first-architecture.md", "03-editor-experience.md",
+    "04-clipping-quality-and-evaluation.md", "05-testing-and-quality-gates.md", "06-90-day-roadmap.md",
+    "07-decisions-and-open-questions.md", "08-repository-audit.md", "09-baseline-report.md",
+    "10-implementation-notes.md"
+)) { Assert-File "docs/$doc" }
+Assert-File "backend/tests/fixtures/media/speech_landscape.mp4"
 Assert-File "scripts\sprint3-validate.ps1"
-Assert-File "scripts\backup-storage.ps1"
-Assert-File "scripts\restore-storage.ps1"
+Assert-File "scripts\e2e_real.py"
+Assert-File "scripts\eval_report.py"
+Assert-File "scripts/backup-storage.ps1"
+Assert-File "scripts/restore-storage.ps1"
 Assert-File "scripts\export-release-package.ps1"
 
 $env:FRONTEND_HOST_PORT = [string]$FrontendPort
@@ -58,5 +66,12 @@ if ($rootPackage.version -ne "1.0.0" -or $frontendPackage.version -ne "1.0.0") {
     throw "Package versions must be 1.0.0 for the MVP release."
 }
 
+if ($RunRealE2E) {
+    Write-Host ""
+    Write-Host "== Real-stack end-to-end (Whisper + FFmpeg + Ollama) ==" -ForegroundColor Cyan
+    python scripts/e2e_real.py --api $BackendUrl
+    if ($LASTEXITCODE -ne 0) { throw "Real end-to-end check failed" }
+}
+
 Write-Host ""
-Write-Host "Sprint 4 release validation completed." -ForegroundColor Green
+Write-Host "Release validation completed." -ForegroundColor Green
