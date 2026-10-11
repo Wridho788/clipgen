@@ -15,7 +15,7 @@ dan Ollama untuk metadata title/caption/hashtags.
 ## Features
 
 - Upload video lokal (MP4/MOV/MKV/WebM) atau URL YouTube; queue job dengan progress dan ETA per stage.
-- Transkrip Whisper lokal yang dinormalisasi (urutan, batas durasi, segmen halusinasi di luar audio dibuang).
+- Transkrip Whisper lokal yang dinormalisasi (urutan, batas durasi, segmen halusinasi di luar audio dibuang). **Bahasa audio** dipilih per job (default Indonesia; English atau deteksi otomatis) — terpisah dari bahasa metadata. Deteksi otomatis yang ragu memberi peringatan di job.
 - Kandidat klip dipotong **di batas kalimat transkrip** (`transcript-boundary-v1`) dan tetap tersebar sepanjang video, dengan alasan yang bisa dibaca dan peringkat relatif — bukan persen atau prediksi viral.
 - Editor klip: preview langsung dari video sumber, trim dari playhead (I/O), reset ke saran AI, caption dari transkrip yang bisa diedit (teks, timing, ukuran, warna, outline/kotak, posisi), framing/crop, audio & normalisasi, watermark.
 - Autosave dengan status terlihat, deteksi konflik versi, undo/redo, shortcut keyboard.
@@ -176,6 +176,8 @@ Stage unduh berjalan dari backend/container ke YouTube, sehingga kecepatan diten
 
 Set `RENDER_ACCELERATION=auto` untuk memakai NVENC bila ffmpeg dan GPU NVIDIA tersedia; render otomatis beralih ke CPU bila tidak. Pada Docker, GPU juga harus diekspos ke container melalui runtime NVIDIA.
 
+Default bahasa audio untuk job baru diatur dengan `WHISPER_LANGUAGE` (`id`, `en`, atau `auto`). Jangan pakai `auto` untuk acara TV/podcast yang dibuka dengan musik: Whisper menebak bahasa dari 30 detik pertama dan pernah membaca acara Indonesia sebagai bahasa Katalan.
+
 Untuk video panjang pada CPU, default transkripsi memakai `WHISPER_BEAM_SIZE=3`, `WHISPER_VAD_FILTER=true`, dan `TRANSCRIPTION_TIMEOUT_MULTIPLIER=4.0`. Nilai terakhir mempertahankan hard stop tetapi menghindari penghentian terlalu dini ketika CPU lebih lambat dari ETA. Jangan set `WHISPER_DEVICE=cuda` hanya karena NVENC tersedia: CUDA harus terdeteksi oleh CTranslate2 di dalam container.
 
 ## Known Limitations
@@ -187,7 +189,7 @@ Untuk video panjang pada CPU, default transkripsi memakai `WHISPER_BEAM_SIZE=3`,
 - Auth lokal bersifat opsional; jangan expose langsung ke internet publik tanpa reverse proxy, HTTPS, dan secret yang aman.
 - Queue masih in-process dan memproses satu job pada satu waktu. Job aktif yang terputus saat restart ditandai gagal dan dapat dijalankan ulang secara manual.
 - YouTube extraction bergantung pada ketersediaan dan perubahan platform sumber.
-- Transkripsi CPU dengan Whisper `tiny` bisa lebih lama dari durasi video (terukur ±1,4×); video panjang butuh waktu dan resource Docker lebih besar.
+- Transkripsi CPU dengan Whisper `small` (default) kira-kira 5–10× durasi audio — episode 52 menit ±8 jam. `WHISPER_MODEL_SIZE=tiny` ±2,7× lebih cepat tetapi transkrip bahasa Indonesia-nya hampir tidak terbaca. GPU CUDA di container akan memangkas waktu ini drastis.
 
 Daftar lengkap: `docs/10-implementation-notes.md` §6.
 

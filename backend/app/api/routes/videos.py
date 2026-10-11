@@ -82,6 +82,7 @@ async def upload_video(
     max_clip_seconds: float | None = Form(None),
     clip_count: int | None = Form(None),
     metadata_language: Literal["id", "en"] | None = Form(None),
+    transcript_language: Literal["auto", "id", "en"] | None = Form(None),
     processing_mode: Literal["automatic", "manual"] | None = Form(None),
     crop_vertical: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
@@ -99,6 +100,7 @@ async def upload_video(
         max_clip_seconds=max_clip_seconds,
         clip_count=clip_count,
         metadata_language=metadata_language,
+        transcript_language=transcript_language,
         processing_mode=processing_mode,
         crop_vertical=crop_vertical,
         generate_metadata=generate_metadata,
@@ -196,6 +198,7 @@ async def process_youtube(
     max_clip_seconds: float | None = Form(None),
     clip_count: int | None = Form(None),
     metadata_language: Literal["id", "en"] | None = Form(None),
+    transcript_language: Literal["auto", "id", "en"] | None = Form(None),
     processing_mode: Literal["automatic", "manual"] | None = Form(None),
     crop_vertical: bool | None = Form(None),
     generate_metadata: bool | None = Form(None),
@@ -219,6 +222,7 @@ async def process_youtube(
         max_clip_seconds=max_clip_seconds,
         clip_count=clip_count,
         metadata_language=metadata_language,
+        transcript_language=transcript_language,
         processing_mode=processing_mode,
         crop_vertical=crop_vertical,
         generate_metadata=generate_metadata,
@@ -343,6 +347,7 @@ def _processing_options_from_values(
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = None,
     campaign_brief_json: str | None = None,
     burn_captions: bool | None = None,
+    transcript_language: Literal["auto", "id", "en"] | None = None,
 ) -> JobProcessingOptions:
     defaults = default_processing_options().model_dump()
     resolved_mode = processing_mode if processing_mode is not None else defaults["processing_mode"]
@@ -380,6 +385,9 @@ def _processing_options_from_values(
                     else defaults["generate_metadata"]
                 ),
                 "burn_captions": burn_captions if burn_captions is not None else default_captions,
+                "transcript_language": (
+                    transcript_language if transcript_language is not None else defaults["transcript_language"]
+                ),
                 "output_preset": (
                     output_preset if output_preset is not None else defaults["output_preset"]
                 ),

@@ -12,6 +12,8 @@ test.describe("Real backend workflow", () => {
 
   test("upload → candidates → edit captions and trim → render → reopen → download", async ({ page }, testInfo) => {
     await page.goto("/");
+    // The fixture is English speech; Indonesian is the default audio language.
+    await page.getByLabel("Bahasa audio").selectOption("en");
     await page.locator('input[type="file"]').setInputFiles(FIXTURE);
     await page.waitForURL(/\/jobs\/[^/]+$/, { timeout: 120_000 });
     const jobUrl = page.url();

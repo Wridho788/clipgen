@@ -91,17 +91,22 @@ were not aligned to sentences.
 - **Download marks a clip "exported"** (review status + timestamp).
 - **Automatic YouTube mode** stays a clean, caption-free export unless
   captions are requested.
+- **Spoken language is chosen, not guessed** (`transcript_language`:
+  `id` default, `en`, or `auto`). It is independent of the metadata
+  language. With `auto`, the job warns when Whisper's confidence is below
+  `WHISPER_LANGUAGE_MIN_PROBABILITY` (0.6) or the language is not id/en/ms.
+  Jobs created before this option fall back to `id` when retried.
 
-## 5. Quality gates and results (2026-10-10)
+## 5. Quality gates and results (2026-10-10, re-run 2026-10-11 with `small` + audio language)
 
 | Gate | Command | Result |
 |---|---|---|
-| Backend unit/API/media tests | `docker exec -w /app clipgen-backend python -m pytest -q` | 158 passed |
+| Backend unit/API/media tests | `docker exec -w /app clipgen-backend python -m pytest -q` | 172 passed |
 | Backend static check | `python -m ruff check app tests --select F,E9` | clean |
 | Frontend types + lint + build | `tsc --noEmit`, `pnpm --dir frontend lint`, `next build` | clean |
 | Playwright (mocked API) | `pnpm --dir frontend e2e` | 26 passed (13 per viewport: 7 existing + 6 editor; desktop and Pixel 5), 2 skipped (opt-in real spec) |
-| Real stack, API level | `python scripts/e2e_real.py` | 50 passed, 0 failed (446 s) |
-| Real stack, browser | `E2E_REAL_BACKEND=1 pnpm --dir frontend exec playwright test e2e/real-backend.spec.ts` | 1 passed (3.9 min): UI upload → candidates → caption + trim edit → render validated 1080×1920 → reopen → download probed |
+| Real stack, API level | `python scripts/e2e_real.py` | 51 passed, 0 failed with `small` (471 s; transcription 230 s for 104 s of audio) |
+| Real stack, browser | `E2E_REAL_BACKEND=1 pnpm --dir frontend exec playwright test e2e/real-backend.spec.ts` | 1 passed (4.5 min with `small`, production build on :3001): audio language chosen in the UI → upload → candidates → caption + trim edit → render validated 1080×1920 → reopen → download probed |
 
 `scripts/sprint3-validate.ps1` runs the container suite, ruff, lint, type
 check, build, and Playwright; `scripts/release-validate.ps1 -RunRealE2E`
@@ -137,21 +142,28 @@ player, small viewport, keyboard-only navigation, and a long source.
   transparent heuristic, not evidence of quality (docs/04 §8).
 - **Caption timing is proportional within a transcript segment**
   (`word_timestamps=False`); expect manual timing fixes on fast speech.
-- **Whisper `tiny` accuracy** limits caption accuracy; larger models were
-  not measured.
+- **Transcription is slow on CPU.** The default model is `small` (readable
+  Indonesian, `09` §4.1) at roughly 5–10× the audio duration: a 52-minute
+  TV episode needs about 8 hours. `WHISPER_MODEL_SIZE=tiny` is ~2.7× faster
+  but its Indonesian captions need heavy correction. A CUDA-capable
+  container would remove most of this cost.
+- **Existing transcripts are not re-transcribed automatically.** Jobs
+  processed with a wrong language need "Proses ulang", which reprocesses
+  the whole source.
 - **Preview approximations** listed in §2; the rendered MP4 is the
   reference.
 - **No face/speaker tracking**; framing is a manual focus point.
 - **Only the latest export is kept per clip**; there is no export history.
-- **One job at a time**; long sources on CPU take roughly 1.4× their
-  duration just to transcribe (`09` §2).
+- **One job at a time**; a long transcription blocks the queue for hours.
 - **Single-user local deployment**; do not expose the API publicly.
 - Baseline numbers are single runs on a shared machine (`09` §7 lists what
   to repeat).
 
 ## 7. Open questions
 
-1. Is Whisper `base` worth ~2× transcription time for fewer caption fixes?
+1. ~~Is a larger Whisper model worth the time?~~ Decided 2026-10-11: `small`
+   by default. Open follow-up: GPU transcription or a faster engine to make
+   long episodes practical.
 2. Should word timestamps be enabled for caption timing (cost unmeasured)?
 3. Keep an export history (ExportJob table) or is "latest export" enough?
 4. Which cohort is tested first in the observed beta (docs/06 Phase 4)?

@@ -214,7 +214,7 @@ test.describe("Clip editor", () => {
     await page.getByRole("button", { name: "Zoom 1.12×" }).click();
     await page.getByLabel(/Posisi horizontal/).fill("30");
     await expect(page.getByTestId("save-status")).toHaveText(/Tersimpan/, { timeout: 5000 });
-    const saved = state.saves.at(-1)?.edit;
+    const saved = state.saves.at(-1)!.edit;
     expect(saved.visual_style).toBe("zoom");
     expect(saved.framing.focus_x).toBeCloseTo(0.3);
     await expect(page.getByTestId("editor-canvas")).toHaveAttribute("style", /aspect-ratio: 1080 \/ 1920/);

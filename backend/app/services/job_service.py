@@ -295,6 +295,32 @@ class JobService:
         self.db.commit()
         return clip
 
+    def _add_warning(self, message: str) -> None:
+        """Keep every warning for the job instead of letting the last one win."""
+        current = (self.job.warning_message or "").strip()
+        self.job.warning_message = f"{current} {message}".strip() if message not in current else current
+
+    @staticmethod
+    def _language_warning(options: JobProcessingOptions, result) -> str | None:
+        """Flag auto-detection that is unsure or picked an unexpected language."""
+        if options.transcript_language != "auto":
+            return None
+        language = getattr(result, "language", None)
+        probability = getattr(result, "language_probability", None)
+        if not language:
+            return None
+        if probability is not None and probability < settings.whisper_language_min_probability:
+            return (
+                f"Bahasa audio terdeteksi '{language}' dengan keyakinan rendah ({probability:.0%}). "
+                "Jika caption/judul salah bahasa, proses ulang dengan bahasa audio yang dipilih manual."
+            )
+        if language not in {"id", "en", "ms"}:
+            return (
+                f"Bahasa audio terdeteksi '{language}'. Jika video berbahasa Indonesia atau Inggris, "
+                "proses ulang dengan bahasa audio yang dipilih manual."
+            )
+        return None
+
     def _needs_transcript(self, options: JobProcessingOptions) -> bool:
         return bool(options.generate_metadata or options.burn_captions)
 
@@ -384,6 +410,11 @@ class JobService:
                         timeout_seconds=self._transcription_timeout_seconds(),
                         heartbeat_interval_seconds=settings.job_heartbeat_interval_seconds,
                         include_word_timestamps=False,
+                        language=(
+                            None
+                            if processing_options.transcript_language == "auto"
+                            else processing_options.transcript_language
+                        ),
                     )
                 except JobCancelled:
                     raise
@@ -406,8 +437,15 @@ class JobService:
                     "dropped_invalid": report.dropped_invalid,
                     "clamped": report.clamped,
                     "reordered": report.reordered,
+                    "repetitions_collapsed": report.repetitions_collapsed,
                     "model": settings.whisper_model_size,
+                    "requested_language": processing_options.transcript_language,
+                    "language": getattr(raw_segments, "language", None),
+                    "language_probability": getattr(raw_segments, "language_probability", None),
                 }
+                language_warning = self._language_warning(processing_options, raw_segments)
+                if language_warning:
+                    self._add_warning(language_warning)
                 self.job.automatic_summary_json = json.dumps(summary)
                 self.db.commit()
             else:
@@ -419,7 +457,7 @@ class JobService:
 
             n_clips = len(candidates)
             if n_clips == 0:
-                self.job.warning_message = "Video tidak cukup panjang untuk menghasilkan klip."
+                self._add_warning("Video tidak cukup panjang untuk menghasilkan klip.")
                 summary = self.job.automatic_summary
                 summary["candidate_warning"] = ErrorCode.CANDIDATE_EMPTY.value
                 self.job.automatic_summary_json = json.dumps(summary)
@@ -508,7 +546,7 @@ class JobService:
 
             # Mark job done
             if failed_clips:
-                self.job.warning_message = f"{failed_clips} clip gagal dibuat. Periksa status clip untuk detailnya."
+                self._add_warning(f"{failed_clips} clip gagal dibuat. Periksa status clip untuk detailnya.")
                 self.db.commit()
             self._update_status("done", progress=100)
             logger.info(f"Job {self.job_id} completed successfully")

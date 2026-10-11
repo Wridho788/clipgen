@@ -64,6 +64,8 @@ class JobProcessingOptions(BaseModel):
     # an explicit user target, never a hidden fixed batch size.
     clip_count: int = Field(default=0, ge=0, le=12)
     metadata_language: Literal["id", "en"] = "id"
+    # Spoken language passed to Whisper; "auto" lets Whisper detect it.
+    transcript_language: Literal["auto", "id", "en"] = "id"
     processing_mode: Literal["automatic", "manual"] = "manual"
     crop_vertical: bool = False
     generate_metadata: bool = True
@@ -104,6 +106,7 @@ def default_processing_options() -> JobProcessingOptions:
         max_clip_seconds=settings.highlight_max_clip_seconds,
         clip_count=settings.highlight_top_n,
         metadata_language=settings.metadata_default_language,
+        transcript_language=settings.whisper_language,
         processing_mode="manual",
         crop_vertical=False,
         generate_metadata=True,

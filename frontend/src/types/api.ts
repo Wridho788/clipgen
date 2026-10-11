@@ -47,6 +47,8 @@ export interface JobProcessingOptions {
   max_clip_seconds: number;
   clip_count: number;
   metadata_language: "id" | "en";
+  /** Spoken language for Whisper; "auto" lets Whisper detect it. */
+  transcript_language?: "auto" | "id" | "en";
   processing_mode: "automatic" | "manual";
   crop_vertical: boolean;
   generate_metadata: boolean;

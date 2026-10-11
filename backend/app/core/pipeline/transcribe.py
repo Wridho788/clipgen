@@ -32,6 +32,14 @@ class Segment:
     words: list[Word] = field(default_factory=list)
 
 
+class TranscriptResult(list):
+    """Segments plus the language Whisper used (a ``list`` for compatibility)."""
+
+    language: str | None = None
+    language_probability: float | None = None
+    requested_language: str | None = None
+
+
 class TranscriptionTimeoutError(RuntimeError):
     """Raised after terminating a Whisper child that exceeded its job timeout."""
 
@@ -47,6 +55,7 @@ def _transcribe_worker(
     include_word_timestamps: bool,
     message_queue,
     report_every_seconds: float,
+    language: str | None = None,
 ) -> None:
     """Run CTranslate2 outside the API process and stream compact progress events."""
     try:
@@ -63,6 +72,9 @@ def _transcribe_worker(
             beam_size=settings.whisper_beam_size,
             vad_filter=settings.whisper_vad_filter,
             word_timestamps=include_word_timestamps,
+            # ``None`` lets Whisper guess from the first 30 s, which is
+            # unreliable for TV shows that open with music or applause.
+            language=language,
         )
         segments: list[dict[str, float | str]] = []
         last_reported_end = 0.0
@@ -107,7 +119,8 @@ def transcribe(
     timeout_seconds: int | None = None,
     heartbeat_interval_seconds: int | None = None,
     include_word_timestamps: bool = False,
-) -> list[Segment]:
+    language: str | None = None,
+) -> TranscriptResult:
     """Return timestamped segments while keeping the worker cancellable.
 
     Faster-Whisper spends most of the stage inside native CPU code. It therefore
@@ -138,13 +151,14 @@ def transcribe(
             include_word_timestamps,
             messages,
             10.0,
+            language,
         ),
         name=f"clipgen-whisper-{audio_path.stem[:8]}",
     )
 
     logger.info(
         f"Transcribing in isolated worker: {audio_path.name} "
-        f"(device={device}, words={include_word_timestamps}, timeout={timeout}s)"
+        f"(device={device}, language={language or 'auto'}, words={include_word_timestamps}, timeout={timeout}s)"
     )
     process.start()
     deadline = monotonic() + timeout
@@ -185,7 +199,7 @@ def transcribe(
                 raise RuntimeError(f"Transkripsi gagal: {payload[-800:]}")
             if event == "result":
                 raw_segments = payload["segments"]
-                segments = [
+                segments = TranscriptResult(
                     Segment(
                         start=float(item["start"]),
                         end=float(item["end"]),
@@ -201,7 +215,10 @@ def transcribe(
                         ],
                     )
                     for item in raw_segments
-                ]
+                )
+                segments.language = str(payload["language"])
+                segments.language_probability = float(payload["language_probability"])
+                segments.requested_language = language
                 logger.info(
                     f"Transcription done: {len(segments)} segments, "
                     f"detected language={payload['language']} (p={payload['language_probability']:.2f})"

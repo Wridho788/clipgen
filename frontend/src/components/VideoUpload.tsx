@@ -49,6 +49,9 @@ export function VideoUpload() {
   const uploadStartedAtRef = useRef<number | null>(null);
   const [mode, setMode] = useState<"file" | "youtube">("file");
   const [metadataLanguage, setMetadataLanguage] = useState<"id" | "en">("id");
+  // Spoken language sent to Whisper. Auto-detection mislabelled an Indonesian
+  // TV show (music intro) as Catalan, so Indonesian is the explicit default.
+  const [audioLanguage, setAudioLanguage] = useState<"auto" | "id" | "en">("id");
   const [youtubeProcessingMode, setYoutubeProcessingMode] = useState<YoutubeProcessingMode>("automatic");
   const [manualYoutubeOptions, setManualYoutubeOptions] = useState<ManualYoutubeOptions>(
     DEFAULT_MANUAL_YOUTUBE_OPTIONS
@@ -74,6 +77,7 @@ export function VideoUpload() {
     max_clip_seconds: campaignBrief?.max_clip_seconds ?? 60,
     clip_count: 0,
     metadata_language: metadataLanguage,
+    transcript_language: audioLanguage,
     processing_mode: "manual",
     crop_vertical: false,
     generate_metadata: true,
@@ -87,6 +91,7 @@ export function VideoUpload() {
     max_clip_seconds: campaignBrief?.max_clip_seconds ?? 60,
     clip_count: 0,
     metadata_language: metadataLanguage,
+    transcript_language: audioLanguage,
     processing_mode: youtubeProcessingMode,
     crop_vertical: false,
     ...renderOptions,
@@ -299,6 +304,20 @@ export function VideoUpload() {
             <OptionButton active={metadataLanguage === "id"} disabled={uploading} label="Indonesia" onClick={() => setMetadataLanguage("id")} title="Metadata Bahasa Indonesia" />
             <OptionButton active={metadataLanguage === "en"} disabled={uploading} label="English" onClick={() => setMetadataLanguage("en")} title="Metadata English" />
           </div>
+          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+            Bahasa audio
+            <select
+              aria-label="Bahasa audio"
+              value={audioLanguage}
+              disabled={uploading}
+              onChange={(event) => setAudioLanguage(event.target.value as "auto" | "id" | "en")}
+              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              <option value="id">Indonesia</option>
+              <option value="en">English</option>
+              <option value="auto">Deteksi otomatis</option>
+            </select>
+          </label>
           {mode === "youtube" && (
             <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-900/70">
               <Wand2 className="mx-2 h-4 w-4 text-violet-600 dark:text-violet-300" aria-hidden="true" />

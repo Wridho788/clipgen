@@ -375,6 +375,9 @@ function appendProcessingOptions(formData: FormData, options?: Partial<JobProces
   if (options?.metadata_language) {
     formData.append("metadata_language", options.metadata_language);
   }
+  if (options?.transcript_language) {
+    formData.append("transcript_language", options.transcript_language);
+  }
   if (options?.processing_mode) {
     formData.append("processing_mode", options.processing_mode);
   }

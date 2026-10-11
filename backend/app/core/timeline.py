@@ -7,6 +7,7 @@ strings happens only at adapter boundaries.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from app.core.errors import ErrorCode, PipelineError
@@ -52,6 +53,7 @@ class NormalizationReport:
     dropped_invalid: int
     clamped: int
     reordered: bool
+    repetitions_collapsed: int = 0
 
 
 def normalize_segments(
@@ -68,7 +70,7 @@ def normalize_segments(
     """
     limit = duration_ms if duration_ms and duration_ms > 0 else None
     segments: list[TimedSegment] = []
-    dropped_empty = dropped_invalid = clamped = 0
+    dropped_empty = dropped_invalid = clamped = repetitions = 0
 
     for item in raw_segments or []:
         try:
@@ -80,6 +82,8 @@ def normalize_segments(
         except (KeyError, TypeError, ValueError, AttributeError):
             dropped_invalid += 1
             continue
+        text, collapsed = collapse_repetitions(text)
+        repetitions += collapsed
         if not text:
             dropped_empty += 1
             continue
@@ -130,6 +134,7 @@ def normalize_segments(
         dropped_invalid=dropped_invalid,
         clamped=clamped,
         reordered=reordered,
+        repetitions_collapsed=repetitions,
     )
     if input_count >= 4 and dropped_invalid > input_count / 2:
         raise PipelineError(
@@ -137,6 +142,37 @@ def normalize_segments(
             f"{dropped_invalid} dari {input_count} segmen transkrip tidak valid",
         )
     return repaired, report
+
+
+MAX_REPEATS = 2
+_TOKEN_CORE = re.compile(r"[\W_]+", re.UNICODE)
+
+
+def collapse_repetitions(text: str, max_repeats: int = MAX_REPEATS) -> tuple[str, int]:
+    """
+    Shorten Whisper's decoding loops ("balik balik balik balik …").
+
+    Runs of more than three identical words (case and punctuation ignored)
+    are cut to ``max_repeats`` so natural reduplication ("balik balik",
+    "ibu ibu") survives. Returns the cleaned text and how many runs were cut.
+    """
+    tokens = text.split()
+    result: list[str] = []
+    collapsed = 0
+    index = 0
+    while index < len(tokens):
+        core = _TOKEN_CORE.sub("", tokens[index]).lower()
+        end = index + 1
+        while core and end < len(tokens) and _TOKEN_CORE.sub("", tokens[end]).lower() == core:
+            end += 1
+        run = end - index
+        if run > 3:
+            result.extend(tokens[index:index + max_repeats])
+            collapsed += 1
+        else:
+            result.extend(tokens[index:end])
+        index = end
+    return " ".join(result), collapsed
 
 
 def validate_clip_range(

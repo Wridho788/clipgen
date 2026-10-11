@@ -2,6 +2,7 @@ import pytest
 
 from app.core.errors import ErrorCode, PipelineError
 from app.core.timeline import (
+    collapse_repetitions,
     ms_to_ffmpeg,
     ms_to_seconds,
     normalize_segments,
@@ -84,3 +85,16 @@ def test_validate_clip_range_rejects_unusable_ranges(start, end, duration, messa
 
 def test_validate_clip_range_accepts_valid_range():
     validate_clip_range(1_000, 21_000, 60_000)
+
+
+def test_whisper_repetition_loops_are_collapsed_but_reduplication_survives():
+    # Real tiny/base/small output on an Indonesian TV show ended in a loop.
+    looped = "Sana, sana balik balik balik balik balik balik balik balik balik"
+    assert collapse_repetitions(looped) == ("Sana, sana balik balik", 1)
+    assert collapse_repetitions("ibu ibu dan balik balik balik") == ("ibu ibu dan balik balik balik", 0)
+    assert collapse_repetitions("Ya! ya, YA ya. ya") == ("Ya! ya,", 1)
+    segments, report = normalize_segments(
+        [{"start": 0, "end": 5, "text": "halo " + "lagi " * 30}], duration_ms=10_000
+    )
+    assert segments[0].text == "halo lagi lagi"
+    assert report.repetitions_collapsed == 1

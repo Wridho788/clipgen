@@ -27,7 +27,10 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{base_dir / 'storage' / 'app.db'}"
 
     # --- Whisper ---
-    whisper_model_size: str = "tiny"  # tiny/base/small/medium — trade-off speed vs accuracy
+    # tiny/base/small/medium — speed vs accuracy. `small` is the first size
+    # that produced readable Indonesian captions on TV audio (docs/09 §4.1);
+    # it is ~2.7x slower than `tiny` on CPU.
+    whisper_model_size: str = "small"
     # `auto` resolves to CUDA only when the running container can actually use
     # it; the UI reports the resolved device instead of asking users to guess.
     whisper_device: Literal["auto", "cpu", "cuda"] = "auto"
@@ -36,11 +39,19 @@ class Settings(BaseSettings):
     # practical for the short-form selection workflow.
     whisper_beam_size: int = Field(default=3, ge=1, le=5)
     whisper_vad_filter: bool = True
+    # Default spoken language for new jobs ("auto" lets Whisper guess). The
+    # primary content is Indonesian; auto-detection on tiny mis-labelled an
+    # Indonesian TV show as Catalan (docs/09 §4).
+    whisper_language: Literal["auto", "id", "en"] = "id"
+    # Below this auto-detection confidence the job gets a warning.
+    whisper_language_min_probability: float = Field(default=0.6, ge=0.0, le=1.0)
     # Zero lets CTranslate2 select the CPU count exposed to the container.
     whisper_cpu_threads: int = Field(default=0, ge=0, le=64)
     # Conservative initial CPU estimate. The live RTF projection replaces it
     # once a job has processed enough audio.
-    cpu_transcription_rtf: float = Field(default=1.75, ge=0.1, le=10.0)
+    # ``None`` uses the per-model table in processing_estimator
+    # (MODEL_CPU_TRANSCRIPTION_RTF); set a number to override it.
+    cpu_transcription_rtf: float | None = Field(default=None, ge=0.1, le=30.0)
     gpu_transcription_rtf: float = Field(default=0.35, ge=0.05, le=5.0)
 
     # --- Legacy-named clip window defaults ---
@@ -113,7 +124,9 @@ class Settings(BaseSettings):
     # Long CPU transcriptions can legitimately exceed the conservative ETA.
     # Keep an explicit hard stop, but give a long source enough room to finish.
     transcription_timeout_multiplier: float = 4.0
-    transcription_timeout_max_seconds: int = 14_400
+    # `small` on CPU needs ~5-10x the audio duration; a 1-2 h episode must not
+    # be killed by a 4 h ceiling that was sized for `tiny`.
+    transcription_timeout_max_seconds: int = 86_400
     # A reporting cadence, not a failure threshold. Long FFmpeg/Ollama calls
     # may legitimately report every 30–60 seconds on slower devices.
     job_heartbeat_interval_seconds: int = 30

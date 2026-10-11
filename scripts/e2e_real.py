@@ -173,6 +173,7 @@ def main() -> int:
     t0 = time.time()
     status, created = upload(api, fixture, {
         "output_preset": "tiktok", "visual_style": "crop", "metadata_language": "en",
+        "transcript_language": "en",  # the fixture is English speech
         "clip_count": "2", "min_clip_seconds": "15", "max_clip_seconds": "30",
         "burn_captions": "true", "generate_metadata": "true",
     })
@@ -192,6 +193,9 @@ def main() -> int:
     check("job done", job["status"] == "done", job.get("error_message"))
     transcript_summary = (job.get("automatic_summary") or {}).get("transcript", {})
     check("transcript normalized and summarized", transcript_summary.get("segments", 0) > 5, transcript_summary)
+    check("requested audio language used by Whisper",
+          transcript_summary.get("requested_language") == "en" and transcript_summary.get("language") == "en",
+          {k: transcript_summary.get(k) for k in ("requested_language", "language", "language_probability")})
 
     status, clips = request(api, "GET", f"/api/clips/job/{job_id}")
     check("two candidate clips", status == 200 and len(clips) == 2, len(clips) if isinstance(clips, list) else clips)

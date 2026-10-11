@@ -65,9 +65,41 @@ launch?"), which the explanation states.
   (102.2–105.3 s and 106.6–109.4 s for a 103.9 s file), repeating earlier
   sentences — a hallucinated tail. Normalization now clamps/drops them
   (`dropped_invalid: 2` in the job summary).
+- **Wrong spoken language on real Indonesian content.** The pipeline never
+  passed a language to Whisper, so it auto-detected from the first 30 s.
+  On an Indonesian TV show ("ARISAN", 51.8 min, music/applause intro)
+  `tiny` detected **Catalan (p = 0.45)** and produced Catalan captions and
+  titles ("Per què te'n s'ho haurà l'homeament senyori."). Forcing
+  `language="id"` on the same 75 s gives Indonesian text, but `tiny` still
+  drops much of the speech in noisy TV audio (model comparison in §4.1).
+  Fix: per-job `transcript_language` (default `id`), detected language and
+  confidence recorded in the job summary, warning on doubtful
+  auto-detection.
 - Segment-level timing only (`word_timestamps=False`), so caption cues are
   timed proportionally within a segment. Users can correct timing; word
   timestamps are an open option (cost not yet measured).
+
+### 4.1 Whisper model comparison on Indonesian TV audio
+
+First 75 s of the "ARISAN" source (studio music, applause, several
+speakers), `language="id"`, CPU int8, beam 3, VAD on, idle machine,
+2026-10-11. One sample — indicative, not a benchmark.
+
+| Model | Time for 75 s | Real-time factor | Words | Excerpt |
+|---|---|---|---|---|
+| `tiny` | 264 s | 3.5× | 57 | "Perlatus lo lo mau menciniun DCS, lo tanpa lagi di Rank Ayan Harisan Mereka." |
+| `base` | 449 s | 6.0× | 60 | "Slow dada lagi di Rangkayan … Ari San Marde Kabas … Tapi kita kan main bersama influencer" |
+| `small` | 718 s | 9.6× | 62 | "Selamat datang lagi di rangkaian Arisan Merdeka … Besertanya bukan ibu-ibu tapi kita akan main bersama Influencer Top Indonesia" |
+
+- Only `small` produces captions a viewer could read without heavy
+  correction on this material; `tiny` is mostly unusable.
+- At these factors a 52-minute episode would take roughly 3 h (`tiny`),
+  5 h (`base`) or 8 h (`small`) to transcribe on this CPU. Noisy TV audio
+  is ~2.5× slower than the clean fixture (`tiny` 1.4× there).
+- All three models ended in a decoding loop ("balik balik balik …" ×20+).
+  Normalization now collapses runs of more than three identical words to
+  two (natural reduplication such as "ibu ibu" is kept) and counts them in
+  the job summary (`repetitions_collapsed`).
 
 ## 5. Export validation and parity (run B / B′, real FFmpeg)
 
