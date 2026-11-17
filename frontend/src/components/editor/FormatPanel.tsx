@@ -86,10 +86,10 @@ export function FormatPanel({ edit, onChange }: FormatPanelProps) {
               className="mt-2 w-full accent-violet-600"
             />
           </label>
-          <p className="text-[11px] text-slate-500 sm:col-span-2">0% = tepi kiri/atas, 50% = tengah. Tidak ada tepi kosong: kanvas selalu terisi penuh. Tracking wajah otomatis belum tersedia.</p>
+          <p className="text-[11px] text-ink-subtle sm:col-span-2">0% = tepi kiri/atas, 50% = tengah. Tidak ada tepi kosong: kanvas selalu terisi penuh. Tracking wajah otomatis belum tersedia.</p>
         </div>
       ) : (
-        !isOriginal && <p className="text-xs text-slate-500">Latar blur menampilkan seluruh frame sumber; posisi crop tidak berlaku.</p>
+        !isOriginal && <p className="text-xs text-ink-subtle">Latar blur menampilkan seluruh frame sumber; posisi crop tidak berlaku.</p>
       )}
 
       <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">

@@ -74,11 +74,17 @@ async def lifespan(app: FastAPI):
     
     # 2. Validate dependencies
     try:
-        ollama_ok = test_ollama_connection()
-        if ollama_ok:
-            logger.info("✅ Ollama connection OK")
+        if settings.metadata_provider == "gemini":
+            if settings.gemini_api_key:
+                logger.info(f"✅ Gemini metadata provider configured ({settings.gemini_model})")
+            else:
+                logger.warning("⚠️  GEMINI_API_KEY is missing; metadata generation will fallback")
         else:
-            logger.warning("⚠️  Ollama tidak tersedia, metadata generation akan fallback ke default")
+            ollama_ok = test_ollama_connection()
+            if ollama_ok:
+                logger.info("✅ Ollama connection OK")
+            else:
+                logger.warning("⚠️  Ollama tidak tersedia, metadata generation akan fallback ke default")
     except Exception as e:
         logger.warning(f"⚠️  Ollama check error: {e}")
     
@@ -176,7 +182,7 @@ async def liveness():
 
 @app.get("/health/ready")
 async def readiness():
-    """Readiness probe: database is reachable; Ollama is reported but optional."""
+    """Readiness probe: database is reachable; metadata provider is optional."""
     database_ready = False
     try:
         with SessionLocal() as db:
@@ -190,6 +196,12 @@ async def readiness():
         "status": "ok" if database_ready else "unavailable",
         "database": database_ready,
         "ollama": ollama_ready,
+        "metadata_provider": settings.metadata_provider,
+        "metadata_configured": (
+            bool(settings.gemini_api_key)
+            if settings.metadata_provider == "gemini"
+            else ollama_ready
+        ),
         "queue": get_job_queue().status(),
     }
 

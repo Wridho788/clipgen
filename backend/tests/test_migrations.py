@@ -81,3 +81,22 @@ def test_unknown_columns_are_not_dropped(tmp_path):
     run_migrations(engine)
     with engine.connect() as connection:
         assert connection.execute(text("SELECT DISTINCT future_field FROM clips")).scalar() == "keep me"
+
+
+def test_campaign_migration_adds_tables_job_columns_and_presets(tmp_path):
+    engine = _legacy_engine(tmp_path)
+    run_migrations(engine)
+
+    assert {"campaigns", "campaign_configurations"} <= set(inspect(engine).get_table_names())
+    job_columns = {column["name"] for column in inspect(engine).get_columns("jobs")}
+    assert {"campaign_id", "campaign_configuration_version"} <= job_columns
+    with engine.connect() as connection:
+        # Legacy jobs stay unlinked; their brief (if any) remains in processing_options.
+        assert connection.execute(text("SELECT campaign_id FROM jobs WHERE id = 'j1'")).scalar() is None
+        presets = connection.execute(text("SELECT id, owner_id, type, status FROM campaigns ORDER BY id")).fetchall()
+        versions = connection.execute(text("SELECT COUNT(*) FROM campaign_configurations")).scalar()
+    assert presets == [
+        ("preset-rumah_ningrat", None, "custom", "active"),
+        ("preset-yava_happy_health", None, "custom", "active"),
+    ]
+    assert versions == 2

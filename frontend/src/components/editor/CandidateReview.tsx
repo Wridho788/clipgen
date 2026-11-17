@@ -43,7 +43,7 @@ export function CandidateReview({ clip, position, total, busy, onReview, onDupli
     <section aria-label="Review kandidat" className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Kandidat {position} / {total}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">Kandidat {position} / {total}</p>
           <p className="mt-0.5 text-sm text-slate-900 dark:text-slate-100" data-testid="candidate-rank">
             {candidate?.rank ? `Peringkat #${candidate.rank} dari ${candidate.total}` : "Tanpa peringkat"}
             <span className="ml-2 rounded-full border border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 dark:border-slate-700 dark:text-slate-300" data-testid="review-status">
@@ -66,7 +66,7 @@ export function CandidateReview({ clip, position, total, busy, onReview, onDupli
               {candidate.explanation.map((reasonText) => <li key={reasonText}>{reasonText}</li>)}
             </ul>
           )}
-          <p className="mt-1.5 text-[11px] text-slate-500">
+          <p className="mt-1.5 text-[11px] text-ink-subtle">
             {candidate.score_meaning} Algoritma <span className="font-mono">{candidate.algorithm_version}</span>.
           </p>
         </div>
@@ -81,18 +81,18 @@ export function CandidateReview({ clip, position, total, busy, onReview, onDupli
             </select>
           </label>
           <button type="button" disabled={busy} onClick={() => { onReview("rejected", reason); setRejecting(false); }} className="rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60">Tolak kandidat</button>
-          <button type="button" onClick={() => setRejecting(false)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700">Batal</button>
+          <button type="button" onClick={() => setRejecting(false)} className="cg-btn min-h-9 px-3 py-1.5">Batal</button>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <button type="button" disabled={busy || status === "accepted"} onClick={() => onReview("accepted")} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-800 disabled:opacity-50">
+          <button type="button" disabled={busy || status === "accepted"} onClick={() => onReview("accepted")} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-800 transition-colors duration-150 disabled:opacity-50 dark:border-emerald-400/40 dark:bg-emerald-400/10 dark:text-emerald-200">
             <Check className="h-4 w-4" /> Terima
           </button>
-          <button type="button" disabled={busy} onClick={() => setRejecting(true)} className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 disabled:opacity-50">
+          <button type="button" disabled={busy} onClick={() => setRejecting(true)} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 transition-colors duration-150 disabled:opacity-50 dark:border-rose-400/40 dark:bg-rose-400/10 dark:text-rose-200">
             <X className="h-4 w-4" /> Tolak…
           </button>
           {status !== "suggested" && (
-            <button type="button" disabled={busy} onClick={() => onReview("suggested")} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200">
+            <button type="button" disabled={busy} onClick={() => onReview("suggested")} className="cg-btn min-h-9 px-3 py-1.5">
               <RotateCcw className="h-4 w-4" /> Reset review
             </button>
           )}

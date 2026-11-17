@@ -84,11 +84,11 @@ export function CaptionPanel({ edit, playheadMs, onChange, onSeek }: CaptionPane
                 onClick={() => setStyle({ text_color: color })}
                 aria-label={`Warna teks ${color}`}
                 aria-pressed={style.text_color === color}
-                className={`h-7 w-7 rounded-full border-2 ${style.text_color === color ? "border-violet-500 ring-2 ring-violet-300" : "border-slate-300"}`}
+                className={`h-7 w-7 rounded-full border-2 ${style.text_color === color ? "border-violet-500 ring-2 ring-violet-300" : "border-line-strong"}`}
                 style={{ backgroundColor: color }}
               />
             ))}
-            <input type="color" aria-label="Warna teks kustom" value={style.text_color} onChange={(event) => setStyle({ text_color: event.target.value.toUpperCase() })} className="h-7 w-9 cursor-pointer rounded border border-slate-300" />
+            <input type="color" aria-label="Warna teks kustom" value={style.text_color} onChange={(event) => setStyle({ text_color: event.target.value.toUpperCase() })} className="h-7 w-9 cursor-pointer rounded border border-line-strong" />
           </div>
         </div>
         <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -111,19 +111,19 @@ export function CaptionPanel({ edit, playheadMs, onChange, onSeek }: CaptionPane
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Teks & timing</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">Teks & timing</p>
           <button type="button" onClick={addCue} className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 dark:border-slate-700 dark:text-slate-200">
             <Plus className="h-3.5 w-3.5" /> Tambah di playhead
           </button>
         </div>
-        {cues.length === 0 && <p className="text-sm text-slate-500">Belum ada caption. Transkrip tidak tersedia untuk klip ini; tambahkan baris secara manual.</p>}
+        {cues.length === 0 && <p className="text-sm text-ink-subtle">Belum ada caption. Transkrip tidak tersedia untuk klip ini; tambahkan baris secara manual.</p>}
         <ol className="max-h-80 space-y-1.5 overflow-y-auto pr-1" aria-label="Daftar caption">
           {cues.map((cue, index) => {
             const outside = cueOutsideTrim(cue, edit);
             const active = playheadMs >= cue.start_ms && playheadMs < cue.end_ms;
             return (
               <li key={cue.id} className={`rounded-lg border p-2 ${active ? "border-violet-400 bg-violet-50/60 dark:bg-violet-400/10" : "border-slate-200 dark:border-slate-800"} ${outside ? "opacity-60" : ""}`}>
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <div className="flex items-center gap-1.5 text-[11px] text-ink-subtle">
                   <button type="button" onClick={() => onSeek(Math.min(Math.max(cue.start_ms, edit.trim_start_ms), edit.trim_end_ms - 1))} className="font-mono underline-offset-2 hover:underline" aria-label={`Putar caption ${index + 1}`}>
                     #{index + 1}
                   </button>
@@ -149,7 +149,7 @@ export function CaptionPanel({ edit, playheadMs, onChange, onSeek }: CaptionPane
             );
           })}
         </ol>
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+        <p className="text-[11px] text-ink-subtle dark:text-slate-400">
           Kebijakan trim: caption yang seluruhnya di luar trim tetap disimpan tetapi tidak dirender; caption yang terpotong batas trim dipendekkan saat render. Membuat ulang metadata tidak mengubah caption yang sudah dikoreksi.
         </p>
       </div>
@@ -171,7 +171,7 @@ function CueTime({ label, valueMs, onCommit }: { label: string; valueMs: number;
       onKeyDown={(event) => {
         if (event.key === "Enter") (event.target as HTMLInputElement).blur();
       }}
-      className="w-16 rounded border border-transparent bg-transparent px-1 font-mono hover:border-slate-300 focus:border-violet-400 focus:outline-none"
+      className="w-16 rounded border border-transparent bg-transparent px-1 font-mono hover:border-line-strong focus:border-brand focus:outline-none"
     />
   );
 }

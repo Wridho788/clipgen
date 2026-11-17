@@ -55,6 +55,121 @@ class CampaignBrief(BaseModel):
         return self
 
 
+CampaignPlatform = Literal["tiktok", "instagram_reels", "youtube", "facebook"]
+
+
+class CampaignConfigData(BaseModel):
+    """Content of one campaign configuration version (stored as ``config_json``).
+
+    ``rules`` holds the machine-checkable constraints the pipeline and the
+    compliance check already understand. ``soft_preferences`` and
+    ``unresolved_items`` stay plain text: nothing here is verified, and anything
+    the user or the importer could not confirm belongs in ``unresolved_items``
+    instead of being guessed.
+    """
+
+    schema_version: Literal[1] = 1
+    objective: str = Field(default="", max_length=1000)
+    brief: str = Field(default="", max_length=8000)
+    target_audience: str = Field(default="", max_length=500)
+    platforms: list[CampaignPlatform] = Field(default_factory=list, max_length=8)
+    rules: CampaignBrief = Field(default_factory=CampaignBrief)
+    soft_preferences: list[str] = Field(default_factory=list, max_length=30)
+    reward_details: Optional[str] = Field(default=None, max_length=4000)
+    unresolved_items: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def clean_text_lists(self):
+        self.soft_preferences = [value.strip() for value in self.soft_preferences if value.strip()]
+        self.unresolved_items = [value.strip() for value in self.unresolved_items if value.strip()]
+        return self
+
+
+class ExtractedField(BaseModel):
+    """One field the importer looked for in pasted campaign text.
+
+    ``found`` means the text states it explicitly (``evidence`` quotes it),
+    ``needs_review`` means the text is ambiguous or conflicting, and
+    ``not_provided`` means nothing in the text supports a value. A value is never
+    filled in without evidence.
+    """
+
+    status: Literal["found", "needs_review", "not_provided"] = "not_provided"
+    value: Optional[float | str | list[str]] = None
+    evidence: list[str] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+class CampaignImportAnalyzeRequest(BaseModel):
+    text: str = Field(max_length=500_000)
+
+
+class CampaignImportDraft(BaseModel):
+    """Result of analysing pasted text; nothing is saved until the user confirms."""
+
+    raw_source_text: str
+    truncated: bool = False
+    fields: dict[str, ExtractedField] = Field(default_factory=dict)
+    unresolved_items: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CampaignCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    type: Literal["reward", "custom"] = "custom"
+    source: Literal["manual_import", "user_created"] = "user_created"
+    source_name: Optional[str] = Field(default=None, max_length=200)
+    source_url: Optional[str] = Field(default=None, max_length=500)
+    config: CampaignConfigData = Field(default_factory=CampaignConfigData)
+    raw_source_text: Optional[str] = Field(default=None, max_length=50_000)
+    # True only when the user has reviewed and confirmed the rules.
+    confirmed: bool = False
+
+
+class CampaignUpdateRequest(BaseModel):
+    """Saving an edit always creates a new immutable configuration version."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    source_name: Optional[str] = Field(default=None, max_length=200)
+    source_url: Optional[str] = Field(default=None, max_length=500)
+    config: CampaignConfigData
+    raw_source_text: Optional[str] = Field(default=None, max_length=50_000)
+    confirmed: bool = False
+
+
+class CampaignDuplicateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class CampaignConfigurationResponse(BaseModel):
+    campaign_id: str
+    version: int
+    config: CampaignConfigData
+    raw_source_text: Optional[str] = None
+    user_confirmed_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class CampaignSummaryResponse(BaseModel):
+    id: str
+    name: str
+    type: str
+    source: str
+    source_name: Optional[str] = None
+    source_url: Optional[str] = None
+    status: str
+    latest_version: int
+    confirmed: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class CampaignDetailResponse(CampaignSummaryResponse):
+    """Campaign plus its latest configuration."""
+
+    configuration: CampaignConfigurationResponse
+
+
 class JobProcessingOptions(BaseModel):
     """Per-job processing switches tanpa mengubah default server."""
 
@@ -152,6 +267,8 @@ class JobResponse(BaseModel):
     source_size_bytes: Optional[int] = None
     processing_options: Optional[str] = None
     parent_job_id: Optional[str] = None
+    campaign_id: Optional[str] = None
+    campaign_configuration_version: Optional[int] = None
     retry_count: int = 0
     queue_position: Optional[int] = None
     status: str

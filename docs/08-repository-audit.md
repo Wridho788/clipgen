@@ -73,3 +73,28 @@ and a rewrite of every route:
 
 Splitting these into separate tables remains possible later; the edit
 document is versioned independently of the database schema.
+
+## 5. Campaign scope (addendum 2026-10-12)
+
+Audit of the campaign workflow in `clipgen-campaign-uiux-milestones.md` against
+this repository (branch `overhaul/local-first-editor`, commit `1f2ed13`).
+Status: `existing` / `partial` / `missing`. The per-milestone plan lives in
+`11-campaign-workflow-todo.md`.
+
+| Area | Status | Condition at audit time |
+|---|---|---|
+| Campaign brief | `partial` | `CampaignBrief` is a flat rule set: no hard/soft split, type, raw source text, objective, audience, reward details, or unresolved items. |
+| Campaign presets | `partial` | Two presets hardcoded and duplicated in `backend/app/services/campaign_briefs.py` and `frontend/src/lib/campaigns.ts`. |
+| Import + parsing | `missing` | No endpoint, parser, or UI. |
+| Campaign persistence | `missing` | No tables; the brief only lived in `jobs.processing_options`. |
+| Per-job snapshot | `partial` | Brief copied into the job (implicit snapshot) without campaign id or version. |
+| Campaign-aware pipeline | `partial` | Only the brief's min/max duration narrows candidate windows; ranking (`transcript-boundary-v1`) ignores brief topics. |
+| Compliance | `partial` | Deterministic `pass` / `review_required` / `blocked`; no `unknown`; API still sends a percentage `score`. |
+| Editor / export | `existing` / `partial` | Trim, captions, 9:16 framing, autosave, undo/redo, conflict handling, validated atomic export. Missing: pre-export campaign gate, disk-space check, export history. |
+| Design tokens | `missing` | `tailwind.config.js` has no `extend`; colours are hardcoded. |
+
+Data-model decision for campaigns (extends §4): only `campaigns` and
+`campaign_configurations` are new tables. `ClippingJob` = `jobs`;
+`ClipCandidate`/`ClipProject` = `clips`. Configurations are immutable and
+numbered; an edit appends a version. Jobs pin a version at creation and keep a
+brief snapshot in `processing_options`.

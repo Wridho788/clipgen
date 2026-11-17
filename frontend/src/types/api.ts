@@ -42,6 +42,94 @@ export interface CampaignBrief {
   retention_lock: boolean;
 }
 
+// --- Campaigns (backend/app/schemas.py: CampaignConfigData & friends) ---
+
+export interface CampaignConfigData {
+  schema_version: 1;
+  objective: string;
+  brief: string;
+  target_audience: string;
+  platforms: CampaignPlatform[];
+  /** Machine-checkable rules the pipeline and compliance check understand. */
+  rules: CampaignBrief;
+  soft_preferences: string[];
+  reward_details: string | null;
+  unresolved_items: string[];
+}
+
+export interface CampaignSummary {
+  id: string;
+  name: string;
+  type: "reward" | "custom";
+  source: "manual_import" | "user_created";
+  source_name: string | null;
+  source_url: string | null;
+  status: "active" | "archived";
+  latest_version: number;
+  confirmed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignConfiguration {
+  campaign_id: string;
+  version: number;
+  config: CampaignConfigData;
+  raw_source_text: string | null;
+  user_confirmed_at: string | null;
+  created_at: string;
+}
+
+export interface CampaignDetail extends CampaignSummary {
+  configuration: CampaignConfiguration;
+}
+
+export interface CampaignCreateRequest {
+  name: string;
+  type?: "reward" | "custom";
+  source?: "manual_import" | "user_created";
+  source_name?: string | null;
+  source_url?: string | null;
+  config: CampaignConfigData;
+  raw_source_text?: string | null;
+  confirmed: boolean;
+}
+
+export interface CampaignUpdateRequest {
+  name?: string;
+  config: CampaignConfigData;
+  raw_source_text?: string | null;
+  confirmed: boolean;
+}
+
+export type ExtractedFieldStatus = "found" | "needs_review" | "not_provided";
+
+export interface ExtractedField {
+  status: ExtractedFieldStatus;
+  value: number | string | string[] | null;
+  evidence: string[];
+  note: string | null;
+}
+
+export type CampaignImportFieldName =
+  | "min_clip_seconds"
+  | "max_clip_seconds"
+  | "hashtags"
+  | "mentions"
+  | "platforms"
+  | "source_urls"
+  | "prohibited_terms"
+  | "cta"
+  | "dates";
+
+export interface CampaignImportDraft {
+  raw_source_text: string;
+  truncated: boolean;
+  fields: Record<CampaignImportFieldName, ExtractedField>;
+  unresolved_items: string[];
+  warnings: string[];
+}
+
 export interface JobProcessingOptions {
   min_clip_seconds: number;
   max_clip_seconds: number;
@@ -56,6 +144,9 @@ export interface JobProcessingOptions {
   output_preset: "original" | "tiktok" | "reels" | "youtube_shorts" | "square" | "landscape";
   visual_style: "clean" | "blur" | "crop" | "zoom" | "split";
   campaign_brief?: CampaignBrief | null;
+  /** Saved campaign; the backend pins its version and snapshots the brief into the job. */
+  campaign_id?: string | null;
+  campaign_configuration_version?: number | null;
   render_acceleration: "auto";
 }
 
@@ -95,6 +186,8 @@ export interface JobResponse {
   source_size_bytes: number | null;
   processing_options: string | null;
   parent_job_id: string | null;
+  campaign_id?: string | null;
+  campaign_configuration_version?: number | null;
   retry_count: number;
   queue_position: number | null;
   status: JobStatus;

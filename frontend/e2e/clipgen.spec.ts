@@ -81,7 +81,7 @@ test.describe("ClipGen browser QA", () => {
 
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "Bikin klip yang siap publish." })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Proyek", exact: true })).toBeVisible();
     await expect(page.getByText("v1.0.0")).toBeVisible();
     await expect(page.getByText("Worker")).toBeVisible();
     await expect(page.getByRole("button", { name: "Pilih video" })).toBeVisible();

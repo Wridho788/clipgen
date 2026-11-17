@@ -26,6 +26,7 @@ from app.schemas import (
     YouTubePreflightResponse,
     default_processing_options,
 )
+from app.services import campaigns as campaign_service
 from app.services.job_dispatcher import enqueue_job
 from app.services.eta_calibration import calibrate_stage_estimates
 from app.services.media_probe import probe_video
@@ -91,10 +92,15 @@ async def upload_video(
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
     campaign_brief_json: str | None = Form(None),
+    campaign_id: str | None = Form(None),
+    campaign_configuration_version: int | None = Form(None, ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Store a local video, validate its media streams, then queue processing."""
+    campaign_brief_json, linked_campaign_id, linked_campaign_version = _resolve_campaign_link(
+        db, current_user, campaign_id, campaign_configuration_version, campaign_brief_json
+    )
     processing_options = _processing_options_from_values(
         min_clip_seconds=min_clip_seconds,
         max_clip_seconds=max_clip_seconds,
@@ -180,6 +186,8 @@ async def upload_video(
         source_duration_seconds=video_info.duration_seconds,
         source_size_bytes=bytes_written,
         processing_options=processing_options.model_dump_json(),
+        campaign_id=linked_campaign_id,
+        campaign_configuration_version=linked_campaign_version,
         stage_estimates_json=json.dumps(stage_estimates),
         status="pending",
     )
@@ -207,6 +215,8 @@ async def process_youtube(
     visual_style: Literal["clean", "blur", "crop", "zoom", "split"] | None = Form(None),
     render_acceleration: Literal["auto", "cpu", "gpu"] | None = Form(None),
     campaign_brief_json: str | None = Form(None),
+    campaign_id: str | None = Form(None),
+    campaign_configuration_version: int | None = Form(None, ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -217,6 +227,9 @@ async def process_youtube(
 
     _require_youtube_access_or_raise()
 
+    campaign_brief_json, linked_campaign_id, linked_campaign_version = _resolve_campaign_link(
+        db, current_user, campaign_id, campaign_configuration_version, campaign_brief_json
+    )
     processing_options = _processing_options_from_values(
         min_clip_seconds=min_clip_seconds,
         max_clip_seconds=max_clip_seconds,
@@ -245,6 +258,8 @@ async def process_youtube(
         source_path=normalized_url,
         source_name=normalized_url,
         processing_options=processing_options.model_dump_json(),
+        campaign_id=linked_campaign_id,
+        campaign_configuration_version=linked_campaign_version,
         stage_estimates_json=json.dumps(stage_estimates),
         status="pending",
     )
@@ -404,6 +419,38 @@ def _processing_options_from_values(
         )
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def _resolve_campaign_link(
+    db: Session,
+    current_user: User,
+    campaign_id: str | None,
+    version: int | None,
+    campaign_brief_json: str | None,
+) -> tuple[str | None, str | None, int | None]:
+    """Turn ``campaign_id`` into ``(brief snapshot JSON, campaign id, pinned version)``.
+
+    The latest version is pinned at creation time unless one is requested, so a
+    later campaign edit never changes this job. A saved campaign and an inline
+    ``campaign_brief_json`` are mutually exclusive.
+    """
+    if campaign_id is None or not campaign_id.strip():
+        if version is not None:
+            raise HTTPException(status_code=422, detail="campaign_configuration_version butuh campaign_id")
+        return campaign_brief_json, None, None
+    if campaign_brief_json is not None and campaign_brief_json.strip():
+        raise HTTPException(
+            status_code=422, detail="Gunakan campaign_id atau campaign_brief_json, bukan keduanya"
+        )
+    try:
+        brief, pinned_version = campaign_service.resolve_job_brief(
+            db, campaign_id.strip(), current_user.id, version
+        )
+    except campaign_service.CampaignNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except campaign_service.CampaignArchived as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return brief.model_dump_json(), campaign_id.strip(), pinned_version
 
 
 def _parse_campaign_brief(raw_value: str | None) -> CampaignBrief | None:

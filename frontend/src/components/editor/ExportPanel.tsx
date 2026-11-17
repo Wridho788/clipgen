@@ -58,7 +58,7 @@ export function ExportPanel({ clip, hasUnsavedChanges, invalidReason, isSubmitti
       </div>
 
       {(submitError || clip.render_error_message) && !rendering && (
-        <div role="alert" className="flex items-start gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+        <div role="alert" className="flex items-start gap-2 cg-alert">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p>{submitError || clip.render_error_message}</p>
@@ -86,7 +86,7 @@ export function ExportPanel({ clip, hasUnsavedChanges, invalidReason, isSubmitti
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-[11px] text-slate-500">
+          <p className="mt-2 text-[11px] text-ink-subtle">
             Render {report.render_seconds}s dengan {report.encoder} · {(report.validation.size_bytes / 1_048_576).toFixed(1)} MB
           </p>
         </details>
@@ -97,12 +97,12 @@ export function ExportPanel({ clip, hasUnsavedChanges, invalidReason, isSubmitti
           <a
             href={api.getClipDownloadUrl(clip.id)}
             download
-            className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${stale ? "border border-amber-300 bg-amber-50 text-amber-900" : "bg-slate-950 text-white dark:bg-cyan-300 dark:text-slate-950"}`}
+            className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${stale ? "cg-alert-warn" : "bg-brand-strong text-white"}`}
           >
             <Download className="h-4 w-4" />
             {stale ? "Download file lama" : "Download MP4"}
           </a>
-          <span className="text-[11px] text-slate-500">Disimpan di storage lokal ClipGen (backend/storage/clips) dan diunduh ke folder Download browser.</span>
+          <span className="text-[11px] text-ink-subtle">Disimpan di storage lokal ClipGen (backend/storage/clips) dan diunduh ke folder Download browser.</span>
         </div>
       )}
     </section>

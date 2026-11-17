@@ -60,11 +60,15 @@ class Settings(BaseSettings):
     # Zero derives the clip count from source duration.
     highlight_top_n: int = Field(default=0, ge=0, le=12)
 
-    # --- Ollama (metadata generation) ---
+    # --- Metadata generation ---
+    metadata_provider: Literal["ollama", "gemini"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     ollama_timeout_seconds: int = 30
     ollama_num_predict: int = 220
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_timeout_seconds: int = 30
     metadata_default_language: Literal["id", "en"] = "id"
 
     # --- YouTube download ---

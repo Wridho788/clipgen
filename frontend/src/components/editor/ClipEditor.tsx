@@ -14,26 +14,30 @@ import { EditorPreview } from "@/components/editor/EditorPreview";
 import { ExportPanel } from "@/components/editor/ExportPanel";
 import { FormatPanel } from "@/components/editor/FormatPanel";
 import { TrimPanel } from "@/components/editor/TrimPanel";
-import { ClipResponse, RejectionReason } from "@/types/api";
+import { CampaignPanel } from "@/components/editor/CampaignPanel";
+import { CampaignBrief, ClipResponse, RejectionReason } from "@/types/api";
 
-type Tab = "trim" | "captions" | "format" | "metadata";
+type Tab = "trim" | "captions" | "format" | "metadata" | "campaign";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "trim", label: "Trim" },
   { id: "captions", label: "Caption" },
   { id: "format", label: "Format & framing" },
   { id: "metadata", label: "Metadata & distribusi" },
+  { id: "campaign", label: "Campaign" },
 ];
 
 type ClipEditorProps = {
   clip: ClipResponse;
   clips: ClipResponse[];
   sourceDurationSeconds: number | null;
+  /** Campaign rules pinned to this job; null when the job runs without one. */
+  campaignBrief?: CampaignBrief | null;
   onSelect: (clipId: string) => void;
 };
 
 /** Mount with ``key={clip.id}`` so each clip gets its own draft and autosave. */
-export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: ClipEditorProps) {
+export function ClipEditor({ clip, clips, sourceDurationSeconds, campaignBrief = null, onSelect }: ClipEditorProps) {
   const queryClient = useQueryClient();
   const editor = useClipEditor(clip);
   const draft = editor.draft;
@@ -219,7 +223,7 @@ export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: Cli
           onSourceSize={(width, height) => setSourceSize({ width, height })}
         />
         <div className="flex items-center gap-3">
-          <button type="button" onClick={togglePlay} aria-label={playing ? "Jeda" : "Putar klip"} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-950 text-white dark:bg-cyan-300 dark:text-slate-950">
+          <button type="button" onClick={togglePlay} aria-label={playing ? "Jeda" : "Putar klip"} className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-strong text-white">
             {playing ? <Pause className="h-4 w-4" /> : <Play className="ml-0.5 h-4 w-4" />}
           </button>
           <input
@@ -233,11 +237,11 @@ export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: Cli
             className="flex-1 accent-violet-600"
             style={{ backgroundSize: `${progress * 100}% 100%` }}
           />
-          <span className="w-28 text-right font-mono text-xs text-slate-500">
+          <span className="w-28 text-right font-mono text-xs text-ink-subtle">
             {formatClock(Math.max(0, playheadMs - draft.trim_start_ms))} / {formatClock(trimSpan)}
           </span>
         </div>
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+        <p className="text-[11px] text-ink-subtle dark:text-slate-400">
           Shortcut: <kbd>Spasi</kbd> putar/jeda · <kbd>I</kbd>/<kbd>O</kbd> set mulai/akhir · <kbd>←</kbd>/<kbd>→</kbd> geser 1 dtk (Shift: 0,1 dtk) · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Shift+Z</kbd> redo
         </p>
         <CandidateReview
@@ -250,7 +254,7 @@ export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: Cli
           onMove={move}
         />
         {(review.error || duplicate.error || reorder.error) && (
-          <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          <p role="alert" className="cg-alert">
             {[review.error, duplicate.error, reorder.error].find(Boolean)?.message}
           </p>
         )}
@@ -258,15 +262,15 @@ export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: Cli
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div role="tablist" aria-label="Panel editor" className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-900">
-            {TABS.map((item) => (
+          <div role="tablist" aria-label="Panel editor" className="flex flex-wrap gap-1 rounded-lg border border-line bg-elevated p-1">
+            {TABS.filter((item) => item.id !== "campaign" || campaignBrief).map((item) => (
               <button
                 key={item.id}
                 role="tab"
                 type="button"
                 aria-selected={tab === item.id}
                 onClick={() => setTab(item.id)}
-                className={`rounded-md px-3 py-1.5 text-sm ${tab === item.id ? "bg-white font-semibold text-slate-950 shadow-sm dark:bg-slate-800 dark:text-slate-50" : "text-slate-600 dark:text-slate-300"}`}
+                className={`min-h-9 rounded-md px-3 py-1.5 text-sm transition-colors duration-150 ${tab === item.id ? "bg-brand/20 font-semibold text-brand-soft" : "text-ink-muted hover:text-ink"}`}
               >
                 {item.label}
               </button>
@@ -284,7 +288,7 @@ export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: Cli
         </div>
 
         {editor.saveError && (
-          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 cg-alert-warn">
             <span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{editor.saveError}</span>
             {editor.saveState === "conflict" ? (
               <button type="button" onClick={() => void editor.reloadFromServer()} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white">Muat versi terbaru</button>
@@ -294,13 +298,16 @@ export function ClipEditor({ clip, clips, sourceDurationSeconds, onSelect }: Cli
           </div>
         )}
 
-        <div role="tabpanel" className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+        <div role="tabpanel" className="rounded-xl border border-line p-3">
           {tab === "trim" && (
             <TrimPanel edit={draft} playheadMs={playheadMs} sourceDurationMs={sourceDurationMs} suggested={suggested} onChange={setTrim} />
           )}
           {tab === "captions" && <CaptionPanel edit={draft} playheadMs={playheadMs} onChange={editor.update} onSeek={seek} />}
           {tab === "format" && <FormatPanel edit={draft} onChange={editor.update} />}
           {tab === "metadata" && <ClipCard clip={clip} embedded />}
+          {tab === "campaign" && campaignBrief && (
+            <CampaignPanel brief={campaignBrief} compliance={clip.distribution?.compliance ?? null} draft={draft} />
+          )}
         </div>
 
         <ExportPanel
@@ -325,7 +332,7 @@ function SaveIndicator({ state }: { state: ReturnType<typeof useClipEditor>["sav
     conflict: { icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />, label: "Konflik versi" },
   }[state];
   return (
-    <span role="status" aria-live="polite" data-testid="save-status" className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+    <span role="status" aria-live="polite" data-testid="save-status" className="inline-flex items-center gap-1.5 rounded-md border border-line bg-elevated px-2 py-1 text-xs text-ink-muted">
       {map.icon}
       {map.label}
     </span>

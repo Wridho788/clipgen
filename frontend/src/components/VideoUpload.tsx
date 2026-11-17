@@ -2,7 +2,9 @@
 
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   BriefcaseBusiness,
@@ -20,9 +22,8 @@ import {
   Wand2,
 } from "lucide-react";
 import { api, UploadProgress } from "@/lib/api";
-import { CampaignBrief, JobProcessingOptions, ProcessingEstimateResponse, YoutubePreflightResponse } from "@/types/api";
+import { CampaignBrief, CampaignDetail, JobProcessingOptions, ProcessingEstimateResponse, YoutubePreflightResponse } from "@/types/api";
 import { formatFileSize, formatTimeEstimate } from "@/lib/status";
-import { CAMPAIGN_PRESETS } from "@/lib/campaigns";
 
 const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 * 1024;
 const VIDEO_FILE_NAME = /\.(mp4|mkv|avi|mov|webm|m4v)$/i;
@@ -59,7 +60,38 @@ export function VideoUpload() {
   const [renderOptions, setRenderOptions] = useState<RenderOptions>(DEFAULT_RENDER_OPTIONS);
   // Editable transcript captions burned into exports (file + manual YouTube).
   const [burnCaptions, setBurnCaptions] = useState(true);
-  const [campaignBrief, setCampaignBrief] = useState<CampaignBrief | null>(null);
+  // Saved campaign chosen for this video. The detail is loaded on selection so the
+  // job pins exactly the version whose rules are shown here.
+  const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
+  const [campaignLoadingId, setCampaignLoadingId] = useState<string | null>(null);
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+  const { data: savedCampaigns, isLoading: campaignsLoading } = useQuery({
+    queryKey: ["campaigns", { showArchived: false }],
+    queryFn: () => api.listCampaigns(false),
+  });
+  const campaignBrief: CampaignBrief | null = campaign
+    ? {
+        ...campaign.configuration.config.rules,
+        platforms: campaign.configuration.config.platforms.length > 0
+          ? campaign.configuration.config.platforms
+          : campaign.configuration.config.rules.platforms,
+      }
+    : null;
+  const selectCampaign = async (campaignId: string | null) => {
+    setCampaignError(null);
+    if (!campaignId) {
+      setCampaign(null);
+      return;
+    }
+    setCampaignLoadingId(campaignId);
+    try {
+      setCampaign(await api.getCampaign(campaignId));
+    } catch (loadError) {
+      setCampaignError(loadError instanceof Error ? loadError.message : "Gagal memuat campaign.");
+    } finally {
+      setCampaignLoadingId(null);
+    }
+  };
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubePreflight, setYoutubePreflight] = useState<YoutubePreflightResponse | null>(null);
   const [checkingYoutubePreflight, setCheckingYoutubePreflight] = useState(false);
@@ -83,7 +115,8 @@ export function VideoUpload() {
     generate_metadata: true,
     burn_captions: burnCaptions,
     ...renderOptions,
-    campaign_brief: campaignBrief,
+    campaign_id: campaign?.id ?? null,
+    campaign_configuration_version: campaign?.latest_version ?? null,
   } satisfies Partial<JobProcessingOptions>;
 
   const youtubeProcessingOptions = {
@@ -95,7 +128,8 @@ export function VideoUpload() {
     processing_mode: youtubeProcessingMode,
     crop_vertical: false,
     ...renderOptions,
-    campaign_brief: campaignBrief,
+    campaign_id: campaign?.id ?? null,
+    campaign_configuration_version: campaign?.latest_version ?? null,
     ...(youtubeProcessingMode === "automatic"
       ? {
           generate_metadata: true,
@@ -259,7 +293,7 @@ export function VideoUpload() {
               </div>
             </div>
             <span className="inline-flex w-fit items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200">
-              {campaignBrief ? "Guideline aktif" : "Tanpa campaign"}
+              {campaign ? `Guideline aktif · versi ${campaign.latest_version}` : "Tanpa campaign"}
             </span>
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-3">
@@ -268,19 +302,27 @@ export function VideoUpload() {
               disabled={uploading}
               title="Bebas memilih aturan campaign"
               description="Gunakan pengaturan umum ClipGen"
-              onClick={() => setCampaignBrief(null)}
+              onClick={() => selectCampaign(null)}
             />
-            {CAMPAIGN_PRESETS.map((preset) => (
+            {savedCampaigns?.map((item) => (
               <CampaignOption
-                key={preset.id}
-                active={campaignBrief?.id === preset.id}
-                disabled={uploading}
-                title={preset.name}
-                description={`${preset.min_clip_seconds}–${preset.max_clip_seconds} detik · ${preset.platforms.slice(0, 2).join(" + ")}`}
-                onClick={() => setCampaignBrief(preset)}
+                key={item.id}
+                active={campaign?.id === item.id}
+                disabled={uploading || campaignLoadingId !== null}
+                title={item.name}
+                description={campaignLoadingId === item.id ? "Memuat aturan…" : `Versi ${item.latest_version}${item.confirmed ? "" : " · belum dikonfirmasi"}`}
+                onClick={() => selectCampaign(item.id)}
               />
             ))}
           </div>
+          {campaignsLoading && <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Memuat campaign tersimpan…</p>}
+          {campaignError && <p role="alert" className="mt-3 text-xs font-medium text-rose-600 dark:text-rose-300">{campaignError}</p>}
+          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+            Punya campaign baru?{" "}
+            <Link href="/campaigns/new" className="font-medium text-violet-700 underline-offset-2 hover:underline dark:text-violet-300">Import dari teks</Link>
+            {" · "}
+            <Link href="/campaigns" className="font-medium text-violet-700 underline-offset-2 hover:underline dark:text-violet-300">Kelola campaign</Link>
+          </p>
           {campaignBrief && (
             <div className="mt-3 space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
               <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -412,7 +454,7 @@ export function VideoUpload() {
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-violet-300 dark:text-slate-950 dark:hover:bg-violet-200"
+              className="inline-flex items-center gap-2 rounded-lg bg-brand-strong px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand disabled:cursor-not-allowed disabled:opacity-60"
             >
               {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
               {uploading ? "Mengupload" : "Pilih video"}
@@ -506,7 +548,7 @@ export function VideoUpload() {
             <button
               onClick={handleYoutubeSubmit}
               disabled={uploading || checkingYoutubePreflight || !youtubeUrl.trim() || youtubePreflight?.can_start === false}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-violet-300 dark:text-slate-950 dark:hover:bg-violet-200"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-strong px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand disabled:cursor-not-allowed disabled:opacity-50"
             >
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <SlidersHorizontal className="h-4 w-4" />}
               {uploading ? "Membuat job" : checkingYoutubePreflight ? "Memeriksa sesi" : "Proses"}
@@ -514,7 +556,7 @@ export function VideoUpload() {
           </div>
         )}
 
-        {error && <p className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200">{error}</p>}
+        {error && <p className="cg-alert">{error}</p>}
       </div>
     </section>
   );
@@ -539,7 +581,7 @@ function SourceModeButton({
       onClick={onClick}
       disabled={disabled}
       className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
-        active ? "rounded-lg bg-violet-600 text-white dark:bg-violet-300 dark:text-slate-950" : "rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+        active ? "rounded-lg bg-brand-strong text-white" : "rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
       }`}
       title={label}
     >
@@ -603,7 +645,7 @@ function OptionButton({
       title={title}
       className={`px-2.5 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
         active
-          ? "bg-slate-950 text-white dark:bg-cyan-300 dark:text-slate-950"
+          ? "bg-brand-strong text-white"
           : "text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-800"
       }`}
     >

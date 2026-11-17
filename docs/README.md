@@ -33,6 +33,9 @@ Results of applying the pack to this repository:
 10. `10-implementation-notes.md` --- what was implemented per work item,
     candidate algorithm, policies, quality gates, known limitations.
 11. `eval/README.md` --- labeling kit and `scripts/eval_report.py` usage.
+12. `13-findings-and-next-development.md` --- 2026-10-15 findings (6 h transcription,
+    distribution blocker), owner decisions, next development phases. Design:
+    `superpowers/specs/2026-10-15-gpu-transcription-offload-design.md`.
 
 Operational runbooks: `V1_PERFORMANCE_AND_RELIABILITY_RUNBOOK.md`,
 `CAMPAIGN_BRIEF_RUNBOOK.md`, `SYSTEM_OVERVIEW.md` (deployment and API

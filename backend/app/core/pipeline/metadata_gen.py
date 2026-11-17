@@ -1,5 +1,5 @@
 """
-Stage 7: Generate metadata (title, caption, hashtags) menggunakan Ollama lokal.
+Stage 7: Generate metadata (title, caption, hashtags) menggunakan Ollama atau Gemini.
 
 Ollama setup:
   1. Download Ollama dari ollama.ai
@@ -44,7 +44,10 @@ def generate_metadata(
         return _apply_campaign_brief(_with_reference_hashtags(defaults, reference_hashtags), campaign_brief)
 
     try:
-        response = _call_ollama(transcript_text, language, campaign_brief)
+        if settings.metadata_provider == "gemini":
+            response = _call_gemini(transcript_text, language, campaign_brief)
+        else:
+            response = _call_ollama(transcript_text, language, campaign_brief)
         parsed = _parse_response(response, language)
         return _apply_campaign_brief(_with_reference_hashtags(parsed, reference_hashtags), campaign_brief)
     except Exception as e:
@@ -118,6 +121,71 @@ JSON saja, tanpa teks tambahan."""
 
     result = response.json()
     return result.get("response", "")
+
+
+def _call_gemini(
+    transcript_text: str,
+    language: str = "id",
+    campaign_brief: CampaignBrief | None = None,
+) -> str:
+    """Call Gemini generateContent. The API key stays in a request header."""
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY belum dikonfigurasi")
+
+    language = _normalize_language(language)
+    if language == "en":
+        prompt = f"""Extract social media metadata from this audio segment in English:
+
+Transcript:
+{transcript_text}
+
+Return JSON only with these fields:
+- title (5-10 catchy, memorable words)
+- caption (30-50 words that describe the content and invite engagement)
+- hashtags (a list of 5-7 relevant hashtags, without the # symbol)
+
+Do not add claims or context that are not present in the transcript."""
+    else:
+        prompt = f"""Extract metadata dari segmen audio ini dalam Bahasa Indonesia:
+
+Transkrip:
+{transcript_text}
+
+Berikan JSON saja dengan field:
+- title (5-10 kata, menarik dan mudah diingat)
+- caption (30-50 kata yang menjelaskan konten dan mengajak interaksi)
+- hashtags (list 5-7 hashtag relevan, tanpa simbol #)
+
+Jangan menambah klaim atau konteks yang tidak ada di transkrip."""
+
+    if campaign_brief:
+        prompt += _campaign_instructions(campaign_brief, language)
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.gemini_model}:generateContent"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    logger.info(f"Calling Gemini model: {settings.gemini_model}")
+    response = requests.post(
+        url,
+        headers={"x-goog-api-key": settings.gemini_api_key},
+        json=payload,
+        timeout=settings.gemini_timeout_seconds,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Gemini API error {response.status_code}: {response.text[:200]}")
+
+    candidates = response.json().get("candidates") or []
+    parts = (candidates[0].get("content") or {}).get("parts") or [] if candidates else []
+    text_parts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+    result = "".join(text_parts).strip()
+    if not result:
+        raise ValueError("Gemini returned no metadata text")
+    return result
 
 
 def _parse_response(response_text: str, language: str = "id") -> dict:

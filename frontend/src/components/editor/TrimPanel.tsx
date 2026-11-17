@@ -52,7 +52,7 @@ export function TrimPanel({ edit, playheadMs, sourceDurationMs, suggested, onCha
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-900">
         <span data-testid="trim-duration">
           Durasi <strong>{(duration / 1000).toFixed(1)} detik</strong>
-          <span className="ml-2 text-xs text-slate-500">playhead {formatClock(playheadMs)}</span>
+          <span className="ml-2 text-xs text-ink-subtle">playhead {formatClock(playheadMs)}</span>
         </span>
         {suggested && (
           <button
@@ -66,7 +66,7 @@ export function TrimPanel({ edit, playheadMs, sourceDurationMs, suggested, onCha
           </button>
         )}
       </div>
-      {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+      {error && <p role="alert" className="cg-alert">{error}</p>}
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Seek dan play tidak mengubah batas klip. Video sumber tidak pernah diubah; trim disimpan sebagai data edit dalam milidetik.
       </p>

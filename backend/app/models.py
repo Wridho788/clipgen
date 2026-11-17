@@ -44,6 +44,11 @@ class Job(Base):
     source_size_bytes = Column(Integer, nullable=True)
     processing_options = Column(Text, nullable=True)
     parent_job_id = Column(String, nullable=True)
+    # Campaign + configuration version this job was created from. The brief
+    # itself is snapshotted into ``processing_options`` so later campaign edits
+    # never change old evaluations; these two columns only record provenance.
+    campaign_id = Column(String, ForeignKey("campaigns.id"), nullable=True, index=True)
+    campaign_configuration_version = Column(Integer, nullable=True)
     retry_count = Column(Integer, nullable=False, default=0)
     status = Column(String, nullable=False, default="pending")
     progress = Column(Integer, nullable=False, default=0)
@@ -140,6 +145,49 @@ class Job(Base):
             # Keep an adaptive non-zero ETA until the worker moves to the next stage.
             return max(5.0, current_elapsed * 0.5)
         return 0.0
+
+
+class Campaign(Base):
+    """A reusable campaign. Rules live in immutable ``CampaignConfiguration`` rows."""
+
+    __tablename__ = "campaigns"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    # NULL owner = built-in preset visible to every local user.
+    owner_id = Column(String, nullable=True, index=True)
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=False, default="custom")  # reward | custom
+    source = Column(String, nullable=False, default="user_created")  # manual_import | user_created
+    source_name = Column(String, nullable=True)
+    source_url = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="active")  # active | archived
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    configurations = relationship(
+        "CampaignConfiguration",
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+        order_by="CampaignConfiguration.version",
+    )
+
+
+class CampaignConfiguration(Base):
+    """One immutable version of a campaign's rules; an edit creates a new row."""
+
+    __tablename__ = "campaign_configurations"
+    __table_args__ = (UniqueConstraint("campaign_id", "version", name="uq_campaign_configuration_version"),)
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    campaign_id = Column(String, ForeignKey("campaigns.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    config_json = Column(Text, nullable=False)
+    raw_source_text = Column(Text, nullable=True)
+    # NULL until the user explicitly confirms the extracted rules (M2).
+    user_confirmed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    campaign = relationship("Campaign", back_populates="configurations")
 
 
 class Clip(Base):

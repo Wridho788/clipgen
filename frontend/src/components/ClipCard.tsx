@@ -64,7 +64,7 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
           type="button"
           onClick={() => rerender.mutate()}
           disabled={rerender.isPending}
-          className="inline-flex items-center gap-2 border border-rose-300 bg-white px-3 py-2 text-sm text-rose-700 disabled:opacity-60"
+          className="cg-btn border-rose-300 text-rose-600 dark:border-rose-400/40 dark:text-rose-200 disabled:opacity-60"
         >
           {rerender.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           Render ulang
@@ -147,7 +147,7 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
             className="w-full border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50 dark:focus:border-cyan-300"
           />
           {updateClip.error && (
-            <p className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <p className="cg-alert">
               {updateClip.error instanceof Error ? updateClip.error.message : "Gagal menyimpan"}
             </p>
           )}
@@ -198,9 +198,9 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
               />
             </label>
           </div>
-          {trimClip.error && <p className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{trimClip.error instanceof Error ? trimClip.error.message : "Trim gagal dibuat"}</p>}
+          {trimClip.error && <p className="cg-alert">{trimClip.error instanceof Error ? trimClip.error.message : "Trim gagal dibuat"}</p>}
           <div className="flex gap-2">
-            <button onClick={handleTrim} disabled={trimClip.isPending} className="inline-flex items-center gap-2 bg-slate-950 px-3 py-2 text-sm font-medium text-white disabled:opacity-60 dark:bg-cyan-300 dark:text-slate-950">
+            <button onClick={handleTrim} disabled={trimClip.isPending} className="inline-flex items-center gap-2 bg-brand-strong hover:bg-brand px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
               {trimClip.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scissors className="h-4 w-4" />}
               Render trim
             </button>
@@ -290,7 +290,7 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
           )}
 
           {deleteClip.error && (
-            <p className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <p className="cg-alert">
               {deleteClip.error instanceof Error ? deleteClip.error.message : "Gagal menghapus"}
             </p>
           )}
@@ -338,7 +338,7 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
             <button
               onClick={handleDelete}
               disabled={deleteClip.isPending}
-              className="inline-flex items-center gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-2 cg-alert hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
               title="Hapus clip"
             >
               {deleteClip.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}

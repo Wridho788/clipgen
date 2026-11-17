@@ -48,7 +48,7 @@ Buka frontend:
 http://localhost:3001
 ```
 
-## Ollama
+## Metadata AI: Ollama atau Gemini
 
 Default backend Docker memakai Ollama lokal di host:
 
@@ -61,6 +61,28 @@ Ollama hanya dipakai untuk judul, caption distribusi, dan hashtag per klip;
 pemilihan kandidat berjalan lokal tanpa LLM. Bila Ollama belum running, model
 belum di-pull, atau responsnya tidak valid, metadata akan fallback tanpa
 menggagalkan render video.
+
+Untuk memakai Gemini Developer API pada free tier:
+
+1. Buat API key di [Google AI Studio](https://aistudio.google.com/apikey).
+2. Simpan key hanya di `.env` lokal (jangan commit atau kirim lewat frontend):
+
+   ```dotenv
+   METADATA_PROVIDER=gemini
+   GEMINI_API_KEY=your-key
+   GEMINI_MODEL=gemini-3.8-flash
+   ```
+
+3. Jalankan ulang backend dengan `docker compose up -d --build backend`.
+
+Gemini dipakai untuk metadata saja; Whisper dan pemilihan kandidat tetap lokal.
+Jika API key kosong, kuota habis, atau Gemini gagal, ClipGen tetap menghasilkan
+metadata fallback dan render video tetap berjalan. Free tier punya batas kuota
+yang dapat berubah. Transkrip dikirim ke Google untuk generasi metadata; tinjau
+[ketentuan Gemini API](https://ai.google.dev/gemini-api/terms) sebelum memakai
+transkrip privat. Google menyatakan konten di free tier dapat digunakan untuk
+meningkatkan produk mereka. Detail harga dan model aktif ada di
+[pricing Gemini API](https://ai.google.dev/gemini-api/docs/pricing).
 
 ## Validation
 

@@ -5,14 +5,15 @@ import { Moon, Sun } from "lucide-react";
 
 type Theme = "light" | "dark";
 
-export function ThemeToggle() {
+/** Dark is the default workspace theme; a stored choice always wins. */
+export function ThemeToggle({ className = "" }: { className?: string }) {
   const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
     const stored = window.localStorage.getItem("clipgen-theme") as Theme | null;
-    const preferred = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    setTheme(preferred);
-    applyTheme(preferred);
+    const next = stored === "light" || stored === "dark" ? stored : "dark";
+    setTheme(next);
+    applyTheme(next);
   }, []);
 
   const toggleTheme = () => {
@@ -26,11 +27,11 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={toggleTheme}
-      className="inline-flex min-h-10 items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 transition hover:border-slate-900 dark:border-cyan-300/30 dark:bg-cyan-300/10 dark:text-cyan-100 dark:hover:border-cyan-300"
-      title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      className={`cg-btn ${className}`}
+      title={theme === "dark" ? "Ganti ke tema terang" : "Ganti ke tema gelap"}
     >
       {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-      {theme === "dark" ? "Light" : "Dark"}
+      <span className="shell-label">{theme === "dark" ? "Tema terang" : "Tema gelap"}</span>
     </button>
   );
 }

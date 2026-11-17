@@ -71,7 +71,7 @@ export function JobStageTimeline({ job }: { job: JobResponse }) {
       </div>
 
       {(isFailed || isCancelled) && (
-        <div className="mt-3 flex items-center gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+        <div className="mt-3 flex items-center gap-2 cg-alert">
           <X className="h-4 w-4" />
           {isCancelled ? "Job dibatalkan." : job.error_message || "Job berhenti sebelum selesai."}
         </div>

@@ -69,7 +69,7 @@ def _configure_sqlite_journal() -> None:
         connection.commit()
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _apply_sqlite_schema_upgrades():
@@ -219,9 +219,33 @@ def _migration_002_candidate_review_and_edits(connection) -> None:
         )
 
 
+def _migration_003_campaigns(connection) -> None:
+    """Campaigns with versioned configurations, plus job provenance columns."""
+    from app.models import Campaign, CampaignConfiguration
+    from app.services.campaigns import seed_preset_campaigns
+
+    # Campaign is created first because ``jobs.campaign_id`` references it.
+    Campaign.__table__.create(connection, checkfirst=True)
+    CampaignConfiguration.__table__.create(connection, checkfirst=True)
+    _add_missing_columns(
+        connection,
+        "jobs",
+        {
+            "campaign_id": "VARCHAR REFERENCES campaigns(id)",
+            "campaign_configuration_version": "INTEGER",
+        },
+    )
+    if "jobs" in inspect(connection).get_table_names():
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_campaign_id ON jobs (campaign_id)"))
+    # Old jobs keep the brief embedded in ``processing_options``; they stay
+    # unlinked (campaign_id NULL) rather than being guessed into a campaign.
+    seed_preset_campaigns(connection)
+
+
 MIGRATIONS = (
     (1, "v1_columns", _migration_001_v1_columns),
     (2, "candidate_review_and_edits", _migration_002_candidate_review_and_edits),
+    (3, "campaigns", _migration_003_campaigns),
 )
 
 

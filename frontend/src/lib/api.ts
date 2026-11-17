@@ -3,6 +3,12 @@ import {
   AuthSessionResponse,
   AuthUser,
   CampaignBrief,
+  CampaignCreateRequest,
+  CampaignConfiguration,
+  CampaignDetail,
+  CampaignImportDraft,
+  CampaignSummary,
+  CampaignUpdateRequest,
   ClipEdit,
   ClipFeedbackResponse,
   ClipResponse,
@@ -89,9 +95,63 @@ function withAccessToken(url: string): string {
 }
 
 export const api = {
-  // --- Campaign briefs ---
-  listCampaignPresets: async (): Promise<CampaignBrief[]> => {
-    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/presets`);
+  // --- Campaigns ---
+  listCampaigns: async (includeArchived = false): Promise<CampaignSummary[]> => {
+    const query = includeArchived ? "?include_archived=true" : "";
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns${query}`);
+    return handleResponse(response);
+  },
+
+  getCampaign: async (campaignId: string): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}`);
+    return handleResponse(response);
+  },
+
+  listCampaignVersions: async (campaignId: string): Promise<CampaignConfiguration[]> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}/versions`);
+    return handleResponse(response);
+  },
+
+  analyzeCampaignText: async (text: string): Promise<CampaignImportDraft> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    return handleResponse(response);
+  },
+
+  createCampaign: async (data: CampaignCreateRequest): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+  },
+
+  /** Saves an edit as a new configuration version; older versions are kept. */
+  updateCampaign: async (campaignId: string, data: CampaignUpdateRequest): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+  },
+
+  duplicateCampaign: async (campaignId: string): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}/duplicate`, {
+      method: "POST",
+    });
+    return handleResponse(response);
+  },
+
+  setCampaignArchived: async (campaignId: string, archived: boolean): Promise<CampaignSummary> => {
+    const action = archived ? "archive" : "unarchive";
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}/${action}`, {
+      method: "POST",
+    });
     return handleResponse(response);
   },
 
@@ -393,7 +453,13 @@ function appendProcessingOptions(formData: FormData, options?: Partial<JobProces
   if (options?.output_preset) formData.append("output_preset", options.output_preset);
   if (options?.visual_style) formData.append("visual_style", options.visual_style);
   if (options?.render_acceleration) formData.append("render_acceleration", options.render_acceleration);
-  if (options?.campaign_brief) {
+  if (options?.campaign_id) {
+    // The backend pins the version and snapshots the brief; sending the brief too is rejected.
+    formData.append("campaign_id", options.campaign_id);
+    if (options.campaign_configuration_version) {
+      formData.append("campaign_configuration_version", String(options.campaign_configuration_version));
+    }
+  } else if (options?.campaign_brief) {
     formData.append("campaign_brief_json", JSON.stringify(options.campaign_brief));
   }
 }

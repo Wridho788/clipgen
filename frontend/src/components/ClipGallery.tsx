@@ -12,7 +12,7 @@ const REVIEW_TONE: Record<string, string> = {
   accepted: "bg-emerald-500 text-white",
   rejected: "bg-rose-600 text-white",
   edited: "bg-violet-600 text-white",
-  exported: "bg-cyan-500 text-slate-950",
+  exported: "bg-accent text-canvas",
 };
 
 type ClipGalleryProps = {
@@ -35,10 +35,10 @@ export function ClipGallery({ clips, selectedClipId, onSelect }: ClipGalleryProp
             onClick={() => onSelect(clip.id)}
             aria-pressed={selected}
             aria-label={`Pilih ${clip.title || `klip ${index + 1}`} (${REVIEW_LABELS[review] || review})`}
-            className={`group relative w-32 shrink-0 snap-start overflow-hidden rounded-2xl border text-left shadow-sm transition sm:w-36 lg:w-40 ${review === "rejected" ? "opacity-60 " : ""}${
+            className={`group relative w-24 shrink-0 snap-start overflow-hidden rounded-xl border text-left transition-colors duration-150 sm:w-28 ${review === "rejected" ? "opacity-60 " : ""}${
               selected
-                ? "border-violet-400 ring-2 ring-violet-300/70 dark:border-violet-300 dark:ring-violet-300/40"
-                : "border-slate-200 bg-slate-950 hover:-translate-y-0.5 hover:border-violet-300 dark:border-slate-700"
+                ? "border-brand ring-2 ring-brand/40"
+                : "border-line hover:border-brand/60"
             }`}
           >
             <div className="relative aspect-[9/16] bg-slate-950">
@@ -64,19 +64,19 @@ export function ClipGallery({ clips, selectedClipId, onSelect }: ClipGalleryProp
                 {REVIEW_LABELS[review] || review}
               </span>
               {(clip.status === "processing" || clip.render_stale) && (
-                <span className="absolute inset-x-2 top-9 flex items-center justify-center gap-1 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-semibold text-slate-950">
+                <span className="absolute inset-x-2 top-9 flex items-center justify-center gap-1 rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-semibold text-slate-950">
                   {clip.status === "processing" ? <><Loader2 className="h-3 w-3 animate-spin" /> Merender</> : "Perlu render"}
                 </span>
               )}
               <span className="absolute bottom-2 left-2 text-[10px] font-medium text-white">
                 {formatDuration(clip.start_time, clip.end_time)}
               </span>
-              <span className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-slate-950 shadow-sm">
+              <span className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-surface text-ink shadow-sm">
                 {selected ? <Sparkles className="h-3.5 w-3.5" /> : <Play className="ml-0.5 h-3.5 w-3.5 fill-current" />}
               </span>
             </div>
-            <div className="bg-white px-2.5 py-2 dark:bg-slate-900">
-              <p className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">
+            <div className="bg-surface px-2 py-1.5">
+              <p className="truncate text-[11px] font-semibold text-ink">
                 {clip.title || `Klip ${index + 1}`}
               </p>
             </div>
