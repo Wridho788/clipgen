@@ -79,10 +79,10 @@ function StatusItem({
 }) {
   const toneClass =
     tone === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200"
+      ? "rounded-xl border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200"
       : tone === "warn"
-        ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200"
-        : "border-slate-200 bg-white text-slate-700 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-300";
+        ? "rounded-xl border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200"
+        : "rounded-xl border-slate-200 bg-white text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300";
 
   return (
     <div className={`flex min-h-10 items-center justify-between gap-3 border px-3 py-2 ${toneClass}`}>

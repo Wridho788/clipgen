@@ -9,7 +9,7 @@ def test_overall_eta_keeps_future_stages_after_slow_transcription():
         source_path="/tmp/source.mp4",
         status="transcribing",
         stage_estimates_json=(
-            '{"extracting": 5, "transcribing": 60, "detecting": 10, '
+            '{"extracting": 5, "transcribing": 60, '
             '"cutting": 30, "generating_metadata": 15}'
         ),
         stage_metrics_json='{"extracting": 5}',
@@ -17,16 +17,16 @@ def test_overall_eta_keeps_future_stages_after_slow_transcription():
     )
 
     assert job.current_stage_eta_seconds >= 60
-    assert job.overall_eta_seconds >= 115
+    assert job.overall_eta_seconds >= 105
 
 
-def test_youtube_eta_includes_download_and_subtitle_when_pending():
+def test_youtube_eta_uses_only_active_processing_stages():
     job = Job(
         source_type="youtube_url",
         source_path="https://youtu.be/example",
         status="pending",
-        stage_estimates_json='{"downloading": 45, "extracting": 5, "subtitling": 10}',
+        stage_estimates_json='{"downloading": 45, "extracting": 5}',
     )
 
-    assert job.estimated_total_seconds == 60
-    assert job.overall_eta_seconds == 60
+    assert job.estimated_total_seconds == 50
+    assert job.overall_eta_seconds == 50

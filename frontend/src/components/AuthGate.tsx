@@ -124,11 +124,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 className="mt-1.5 w-full border border-slate-300 bg-white px-3 py-2.5 outline-none focus:border-cyan-500 dark:border-slate-700 dark:bg-slate-950"
               />
             </label>
-            {error && <p className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+            {error && <p className="cg-alert">{error}</p>}
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex w-full items-center justify-center gap-2 bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60 dark:bg-cyan-300 dark:text-slate-950"
+              className="inline-flex w-full items-center justify-center gap-2 bg-brand-strong hover:bg-brand px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {mode === "login" ? "Masuk" : "Buat akun"}
@@ -160,9 +160,9 @@ export function AccountControl() {
   const { authEnabled, user, logout } = useClipGenAuth();
   if (!authEnabled || !user) return null;
   return (
-    <div className="inline-flex min-h-10 items-center gap-2 border border-slate-300 bg-white px-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-      <UserRound className="h-4 w-4 text-cyan-600 dark:text-cyan-300" />
-      <span className="max-w-28 truncate">{user.display_name}</span>
+    <div className="flex min-h-10 items-center gap-2 rounded-lg border border-line-strong bg-canvas px-3 text-sm text-ink">
+      <UserRound className="h-4 w-4 text-accent" />
+      <span className="min-w-0 flex-1 truncate">{user.display_name}</span>
       <button type="button" onClick={logout} className="p-2 hover:text-rose-600" title="Keluar">
         <LogOut className="h-4 w-4" />
       </button>

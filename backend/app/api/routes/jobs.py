@@ -7,12 +7,14 @@ from typing import List
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.security import get_current_user
 from app.models import Job, User
 from app.schemas import (
+    CampaignBrief,
     JobCreateResponse,
     JobProcessingOptions,
     JobResponse,
@@ -23,12 +25,13 @@ from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
 from app.services.processing_estimator import build_stage_estimates, total_estimate_seconds
 from app.services.runtime_capabilities import get_runtime_capabilities
+from app.services.youtube_access import YouTubeAccessBlocked, require_youtube_access
 
 router = APIRouter()
 
 
 @router.get("", response_model=List[JobResponse])
-async def list_jobs(
+def list_jobs(
     status: str = None,  # filter by status
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -48,7 +51,7 @@ async def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobResponse)
-async def get_job(
+def get_job(
     job_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -116,6 +119,21 @@ async def retry_job(
             detail="File sumber sudah tidak tersedia. Upload video lagi untuk membuat job baru.",
         )
 
+    if original_job.source_type == "youtube_url" and str(original_job.source_path).startswith(("http://", "https://")):
+        try:
+            require_youtube_access()
+        except YouTubeAccessBlocked as error:
+            headers = (
+                {"Retry-After": str(error.access_status.retry_after_seconds)}
+                if error.access_status.retry_after_seconds
+                else None
+            )
+            raise HTTPException(
+                status_code=error.http_status_code,
+                detail=error.access_status.message,
+                headers=headers,
+            ) from error
+
     if data and data.processing_options:
         processing_options = data.processing_options
     else:
@@ -132,6 +150,12 @@ async def retry_job(
         processing_options,
     )
 
+    # Keep the campaign link only while the retry still runs the same brief
+    # snapshot; overriding the options with another brief drops provenance.
+    keeps_campaign = bool(original_job.campaign_id) and _stored_brief(original_job) == (
+        processing_options.campaign_brief.model_dump() if processing_options.campaign_brief else None
+    )
+
     retry = Job(
         owner_id=current_user.id,
         source_type=original_job.source_type,
@@ -140,6 +164,10 @@ async def retry_job(
         source_duration_seconds=original_job.source_duration_seconds,
         source_size_bytes=original_job.source_size_bytes,
         processing_options=processing_options.model_dump_json(),
+        campaign_id=original_job.campaign_id if keeps_campaign else None,
+        campaign_configuration_version=(
+            original_job.campaign_configuration_version if keeps_campaign else None
+        ),
         stage_estimates_json=json.dumps(stage_estimates),
         parent_job_id=original_job.parent_job_id or original_job.id,
         retry_count=(original_job.retry_count or 0) + 1,
@@ -163,6 +191,21 @@ def _get_owned_job(db: Session, job_id: str, current_user: User) -> Job:
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
+
+
+def _stored_brief(job: Job) -> dict | None:
+    """The campaign brief snapshot embedded in a job's stored options."""
+    try:
+        stored = json.loads(job.processing_options or "{}")
+    except json.JSONDecodeError:
+        return None
+    brief = stored.get("campaign_brief") if isinstance(stored, dict) else None
+    if not brief:
+        return None
+    try:
+        return CampaignBrief.model_validate(brief).model_dump()
+    except ValidationError:
+        return None
 
 
 def _job_response(job: Job) -> JobResponse:

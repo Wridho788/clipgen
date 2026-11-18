@@ -2,9 +2,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.core.pipeline import social_render
-from app.core.pipeline.highlight_detect import _context_score
-from app.core.pipeline.subtitle_burn import _write_ass
-from app.core.pipeline.transcribe import Segment, Word
 
 
 def test_blur_filter_creates_background_and_foreground_layers():
@@ -13,10 +10,6 @@ def test_blur_filter_creates_background_and_foreground_layers():
     assert "split=2" in filter_graph
     assert "boxblur" in filter_graph
     assert "overlay=(W-w)/2:(H-h)/2" in filter_graph
-
-
-def test_context_score_prefers_payoff_or_emotional_moments():
-    assert _context_score("Akhirnya hasilnya bikin semua terharu!") > _context_score("Hari ini kita mulai dari awal.")
 
 
 def test_social_render_uses_selected_preset_and_style(monkeypatch, tmp_path):
@@ -65,24 +58,44 @@ def test_social_render_seeks_and_limits_when_rendering_directly_from_source(monk
     assert "veryfast" in commands[0]
 
 
-def test_karaoke_ass_has_word_highlight_and_hook(tmp_path):
-    subtitle_file = tmp_path / "subtitle.ass"
-    _write_ass(
-        subtitle_file,
-        [
-            Segment(
-                0,
-                1,
-                "Ini payoff",
-                [Word(0, 0.5, "Ini"), Word(0.5, 1, "payoff")],
-            )
-        ],
-        "karaoke",
-        "Jangan skip",
-        10,
+def test_social_render_can_explicitly_skip_the_default_watermark(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(social_render, "select_video_encoder", lambda acceleration: "libx264")
+    monkeypatch.setattr(
+        social_render,
+        "run_ffmpeg_with_fallback",
+        lambda command, encoder, **kwargs: commands.append(command) or SimpleNamespace(returncode=0, stderr=""),
     )
 
-    content = subtitle_file.read_text(encoding="utf-8")
-    assert "Style: Hook" in content
-    assert "Jangan skip" in content
-    assert "\\bord7\\blur3" in content
+    social_render.render_social_clip(
+        Path("source.mp4"),
+        tmp_path,
+        "clip-clean",
+        output_preset="tiktok",
+        visual_style="blur",
+        watermark_text="",
+    )
+
+    assert not any("drawtext=" in part for part in commands[0])
+
+
+def test_watermark_uses_fontconfig_by_default(monkeypatch):
+    monkeypatch.setattr(social_render.settings, "render_font_file", None)
+
+    graph = social_render._append_watermark("[base]", "@RidhoWahyu", 0.78, "bottom_right", 1080, 1920)
+
+    assert "fontfile" not in graph
+
+
+def test_watermark_uses_the_configured_font_file(monkeypatch):
+    """A host whose FFmpeg cannot use fontconfig needs an explicit file."""
+    monkeypatch.setattr(social_render.settings, "render_font_file", r"C:\Windows\Fonts\arial.ttf")
+
+    graph = social_render._append_watermark("[base]", "@RidhoWahyu", 0.78, "bottom_right", 1080, 1920)
+
+    assert "fontfile='C\\:/Windows/Fonts/arial.ttf'" in graph
+    # The colon must be escaped, or FFmpeg parses the path as filter options.
+    assert "fontfile='C:/Windows/Fonts/arial.ttf'" not in graph
+    # The rest of the filter must survive the rewrite.
+    assert "text='@RidhoWahyu'" in graph
+    assert "boxborderw=8" in graph

@@ -40,7 +40,7 @@ async def test_metrics_contract_includes_queue_counts_and_storage(monkeypatch, t
         db.add(Clip(id="clip-1", job_id="job-1", start_time=0, end_time=10, highlight_score=1, file_path=str(clips_dir / "clip.mp4"), status="ready"))
         db.commit()
 
-        response = await system.get_metrics(db, user)
+        response = system.get_metrics(db, user)
 
     assert response["queue"]["queue_size"] >= 0
     assert "worker_running" in response["queue"]
@@ -73,7 +73,7 @@ async def test_performance_baseline_contract_summarizes_completed_jobs(tmp_path)
         )
         db.commit()
 
-        response = await system.get_performance_baseline(limit=10, db=db, current_user=user)
+        response = system.get_performance_baseline(limit=10, db=db, current_user=user)
 
     assert response["jobs_analyzed"] == 1
     assert response["total_processing_seconds"]["count"] == 1
@@ -103,9 +103,9 @@ async def test_release_info_contract(monkeypatch):
     assert response["release_channel"] == "local-mvp"
     assert response["features"]["vertical_crop"] is True
     assert response["features"]["youtube_manual_options"] is True
-    assert response["features"]["upload_subtitles"] is True
-    assert response["features"]["youtube_subtitles"] is True
-    assert response["features"]["context_aware_clipping"] is True
+    assert "upload_subtitles" not in response["features"]
+    assert "youtube_subtitles" not in response["features"]
+    assert "context_aware_clipping" not in response["features"]
     assert response["features"]["gpu_render_fallback"] is True
     assert response["acceleration"]["label"] == "CPU"
     assert response["rendering"]["nvenc_available"] is False

@@ -13,8 +13,6 @@ def test_processing_options_accept_custom_values():
     assert options.clip_count == 3
     assert options.metadata_language == "en"
     assert options.processing_mode == "manual"
-    assert options.generate_highlights is True
-    assert options.generate_subtitles is False
 
 
 def test_processing_options_reject_invalid_duration_range():
@@ -37,18 +35,14 @@ def test_automatic_processing_options_force_safe_youtube_defaults():
         "id",
         "automatic",
         True,
-        True,
         False,
-        True,
     )
 
     assert options.processing_mode == "automatic"
     assert options.crop_vertical is False
-    assert options.generate_highlights is True
-    # Automatic mode selects highlights but honors feature choices instead of
-    # silently rendering metadata/subtitles that the user disabled.
+    # Automatic jobs always keep the video clean even if an old client sends
+    # text-overlay options.
     assert options.generate_metadata is False
-    assert options.generate_subtitles is True
     assert options.clip_count == 3
 
 
@@ -65,9 +59,20 @@ def test_processing_options_map_legacy_crop_and_clean_hook():
         max_clip_seconds=30,
         clip_count=3,
         crop_vertical=True,
-        hook_text="  Jangan skip bagian ini  ",
     )
 
     assert options.output_preset == "tiktok"
     assert options.visual_style == "crop"
-    assert options.hook_text == "Jangan skip bagian ini"
+
+
+def test_processing_options_preserve_campaign_brief_rules():
+    options = _processing_options_from_form(
+        60,
+        90,
+        1,
+        campaign_brief_json='{"id":"yava_happy_health","name":"YAVA","hashtags":["#YAVA"],"min_clip_seconds":60,"max_clip_seconds":90}',
+    )
+
+    assert options.campaign_brief is not None
+    assert options.campaign_brief.id == "yava_happy_health"
+    assert options.campaign_brief.hashtags == ["YAVA"]

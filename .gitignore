@@ -35,3 +35,10 @@ backend/storage-restore-*/
 # OS/editor
 .DS_Store
 Thumbs.db
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Private evaluation labels and reports (see docs/eval/README.md)
+docs/eval/*.csv
+docs/eval/report*.md

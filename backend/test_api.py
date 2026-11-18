@@ -91,7 +91,7 @@ def main():
 
     clips = get_clips(job_id)
     if not clips:
-        print("\n⚠️  Job selesai tapi 0 clips dihasilkan (highlight detection kosong).")
+        print("\n⚠️  Job selesai tanpa menghasilkan klip.")
         sys.exit(1)
 
     ready_clips = [c for c in clips if c["status"] == "ready"]

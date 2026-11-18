@@ -27,7 +27,10 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{base_dir / 'storage' / 'app.db'}"
 
     # --- Whisper ---
-    whisper_model_size: str = "tiny"  # tiny/base/small/medium — trade-off speed vs accuracy
+    # tiny/base/small/medium — speed vs accuracy. `small` is the first size
+    # that produced readable Indonesian captions on TV audio (docs/09 §4.1);
+    # it is ~2.7x slower than `tiny` on CPU.
+    whisper_model_size: str = "small"
     # `auto` resolves to CUDA only when the running container can actually use
     # it; the UI reports the resolved device instead of asking users to guess.
     whisper_device: Literal["auto", "cpu", "cuda"] = "auto"
@@ -36,31 +39,43 @@ class Settings(BaseSettings):
     # practical for the short-form selection workflow.
     whisper_beam_size: int = Field(default=3, ge=1, le=5)
     whisper_vad_filter: bool = True
+    # Default spoken language for new jobs ("auto" lets Whisper guess). The
+    # primary content is Indonesian; auto-detection on tiny mis-labelled an
+    # Indonesian TV show as Catalan (docs/09 §4).
+    whisper_language: Literal["auto", "id", "en"] = "id"
+    # Below this auto-detection confidence the job gets a warning.
+    whisper_language_min_probability: float = Field(default=0.6, ge=0.0, le=1.0)
     # Zero lets CTranslate2 select the CPU count exposed to the container.
     whisper_cpu_threads: int = Field(default=0, ge=0, le=64)
     # Conservative initial CPU estimate. The live RTF projection replaces it
     # once a job has processed enough audio.
-    cpu_transcription_rtf: float = Field(default=1.75, ge=0.1, le=10.0)
+    # ``None`` uses the per-model table in processing_estimator
+    # (MODEL_CPU_TRANSCRIPTION_RTF); set a number to override it.
+    cpu_transcription_rtf: float | None = Field(default=None, ge=0.1, le=30.0)
     gpu_transcription_rtf: float = Field(default=0.35, ge=0.05, le=5.0)
 
-    # --- Highlight detection thresholds ---
-    highlight_window_seconds: float = 5.0
-    # Short-form moments are scored dynamically; this is only a lower bound,
-    # not a forced 15-second output length.
+    # --- Legacy-named clip window defaults ---
     highlight_min_clip_seconds: float = 10.0
     highlight_max_clip_seconds: float = 60.0
-    # Zero means "auto" and is resolved from source duration at runtime.
+    # Zero derives the clip count from source duration.
     highlight_top_n: int = Field(default=0, ge=0, le=12)
-    automatic_youtube_intro_skip_seconds: float = 60.0
-    automatic_youtube_min_segment_gap_seconds: float = 15.0
-    automatic_youtube_intro_analysis_seconds: float = 90.0
-    automatic_youtube_intro_max_skip_seconds: float = 90.0
 
-    # --- Ollama (metadata generation) ---
+    # --- Metadata generation ---
+    metadata_provider: Literal["ollama", "gemini"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     ollama_timeout_seconds: int = 30
     ollama_num_predict: int = 220
+    gemini_api_key: str | None = None
+    # Comma-separated models tried in order. The free tier gives each model
+    # its own per-minute quota bucket, so the next model in the list is a
+    # genuine second chance rather than the same exhausted bucket again.
+    gemini_model_chain: str = "gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    gemini_timeout_seconds: int = 30
+    # Attempts on one model before the chain moves on. The free tier answers
+    # 429 without a Retry-After header, so the delay is ours to choose.
+    gemini_max_attempts_per_model: int = 2
+    gemini_retry_backoff_seconds: float = 1.5
     metadata_default_language: Literal["id", "en"] = "id"
 
     # --- YouTube download ---
@@ -72,8 +87,19 @@ class Settings(BaseSettings):
     youtube_download_max_height: int = Field(default=720, ge=0, le=4320)
     # Optional Netscape-format cookies exported from a browser on the same
     # network.  Never put cookie contents in source control or job requests.
-    youtube_cookies_path: Path | None = None
+    # Keep this as a string so an empty docker-compose env var does not become
+    # the surprising Path('.') value; the downloader normalizes/validates it.
+    youtube_cookies_path: str | None = None
     youtube_user_agent: str | None = None
+    # A local gate prevents jobs that are known to be rejected before they
+    # reach yt-dlp. This is deliberately on by default: a missing browser
+    # session otherwise turns every pasted YouTube URL into a failed job.
+    youtube_require_cookies: bool = True
+    # A bot challenge is a signal to stop creating fresh download attempts.
+    # Repeated blocks use exponential backoff, capped here. Replacing the
+    # cookie file clears the hold automatically because its file stamp changes.
+    youtube_bot_block_cooldown_seconds: int = Field(default=1800, ge=60, le=86_400)
+    youtube_bot_block_max_cooldown_seconds: int = Field(default=28_800, ge=60, le=86_400)
 
     # --- Rendering ---
     # Always automatic. Capability detection chooses an actually usable device
@@ -85,9 +111,19 @@ class Settings(BaseSettings):
     watermark_text: str = "@RidhoWahyu"
     watermark_opacity: float = Field(default=0.78, ge=0.1, le=1.0)
     watermark_position: Literal["bottom_right", "bottom_left", "top_right", "top_left"] = "bottom_right"
+    # Font file used for captions and the watermark.  Leave empty to let
+    # FFmpeg resolve a default through fontconfig, which is what the Docker
+    # image does.  Set it on a host whose FFmpeg build has no working
+    # fontconfig (some Windows builds segfault on it): e.g.
+    #   C:/Windows/Fonts/arial.ttf
+    # The same file also tells libass where to look, so both the caption
+    # track and the watermark render with the same typeface.
+    render_font_file: str | None = None
 
     # --- Upload limits ---
     max_upload_size_mb: int = 2048  # 2GB, wajar untuk video panjang personal use
+    # Windows bind mounts and busy disks can make ffprobe take over 10 seconds.
+    media_probe_timeout_seconds: int = Field(default=60, ge=10, le=300)
 
     # --- Operations ---
     log_level: str = "INFO"
@@ -107,7 +143,9 @@ class Settings(BaseSettings):
     # Long CPU transcriptions can legitimately exceed the conservative ETA.
     # Keep an explicit hard stop, but give a long source enough room to finish.
     transcription_timeout_multiplier: float = 4.0
-    transcription_timeout_max_seconds: int = 14_400
+    # `small` on CPU needs ~5-10x the audio duration; a 1-2 h episode must not
+    # be killed by a 4 h ceiling that was sized for `tiny`.
+    transcription_timeout_max_seconds: int = 86_400
     # A reporting cadence, not a failure threshold. Long FFmpeg/Ollama calls
     # may legitimately report every 30–60 seconds on slower devices.
     job_heartbeat_interval_seconds: int = 30

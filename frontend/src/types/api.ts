@@ -1,16 +1,13 @@
-// Types — harus sinkron manual dengan backend/app/schemas.py
-// (versi minimal ini belum pakai OpenAPI codegen, lihat ARCHITECTURE.md)
+// Types — harus sinkron manual dengan backend/app/schemas.py dan
+// backend/app/core/edit_model.py (belum pakai OpenAPI codegen).
 
 export type JobStatus =
   | "pending"
   | "downloading"
-  | "analyzing_intro"
   | "extracting"
   | "transcribing"
-  | "detecting"
   | "cutting"
   | "cropping"
-  | "subtitling"
   | "generating_metadata"
   | "done"
   | "failed"
@@ -18,21 +15,138 @@ export type JobStatus =
 
 export type ClipStatus = "processing" | "ready" | "failed";
 
+export type CampaignPlatform = "tiktok" | "instagram_reels" | "youtube" | "facebook";
+
+export interface CampaignBrief {
+  id: string;
+  name: string;
+  description: string;
+  platforms: CampaignPlatform[];
+  min_clip_seconds: number;
+  max_clip_seconds: number;
+  hook_required: boolean;
+  hook_max_seconds: number;
+  preferred_hook_types: string[];
+  required_visuals: string[];
+  required_phrases: string[];
+  prohibited_terms: string[];
+  hashtags: string[];
+  mentions: string[];
+  cta: string | null;
+  title_style: "curiosity_truthful" | "direct" | "brand_safe";
+  source_only: boolean;
+  organic_only: boolean;
+  avoid_misleading_edits: boolean;
+  positive_brand_tone: boolean;
+  allow_voiceover: boolean;
+  retention_lock: boolean;
+}
+
+// --- Campaigns (backend/app/schemas.py: CampaignConfigData & friends) ---
+
+export interface CampaignConfigData {
+  schema_version: 1;
+  objective: string;
+  brief: string;
+  target_audience: string;
+  platforms: CampaignPlatform[];
+  /** Machine-checkable rules the pipeline and compliance check understand. */
+  rules: CampaignBrief;
+  soft_preferences: string[];
+  reward_details: string | null;
+  unresolved_items: string[];
+}
+
+export interface CampaignSummary {
+  id: string;
+  name: string;
+  type: "reward" | "custom";
+  source: "manual_import" | "user_created";
+  source_name: string | null;
+  source_url: string | null;
+  status: "active" | "archived";
+  latest_version: number;
+  confirmed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignConfiguration {
+  campaign_id: string;
+  version: number;
+  config: CampaignConfigData;
+  raw_source_text: string | null;
+  user_confirmed_at: string | null;
+  created_at: string;
+}
+
+export interface CampaignDetail extends CampaignSummary {
+  configuration: CampaignConfiguration;
+}
+
+export interface CampaignCreateRequest {
+  name: string;
+  type?: "reward" | "custom";
+  source?: "manual_import" | "user_created";
+  source_name?: string | null;
+  source_url?: string | null;
+  config: CampaignConfigData;
+  raw_source_text?: string | null;
+  confirmed: boolean;
+}
+
+export interface CampaignUpdateRequest {
+  name?: string;
+  config: CampaignConfigData;
+  raw_source_text?: string | null;
+  confirmed: boolean;
+}
+
+export type ExtractedFieldStatus = "found" | "needs_review" | "not_provided";
+
+export interface ExtractedField {
+  status: ExtractedFieldStatus;
+  value: number | string | string[] | null;
+  evidence: string[];
+  note: string | null;
+}
+
+export type CampaignImportFieldName =
+  | "min_clip_seconds"
+  | "max_clip_seconds"
+  | "hashtags"
+  | "mentions"
+  | "platforms"
+  | "source_urls"
+  | "prohibited_terms"
+  | "cta"
+  | "dates";
+
+export interface CampaignImportDraft {
+  raw_source_text: string;
+  truncated: boolean;
+  fields: Record<CampaignImportFieldName, ExtractedField>;
+  unresolved_items: string[];
+  warnings: string[];
+}
+
 export interface JobProcessingOptions {
   min_clip_seconds: number;
   max_clip_seconds: number;
   clip_count: number;
   metadata_language: "id" | "en";
+  /** Spoken language for Whisper; "auto" lets Whisper detect it. */
+  transcript_language?: "auto" | "id" | "en";
   processing_mode: "automatic" | "manual";
   crop_vertical: boolean;
-  generate_highlights: boolean;
   generate_metadata: boolean;
-  generate_subtitles: boolean;
-  context_aware: boolean;
+  burn_captions?: boolean;
   output_preset: "original" | "tiktok" | "reels" | "youtube_shorts" | "square" | "landscape";
   visual_style: "clean" | "blur" | "crop" | "zoom" | "split";
-  subtitle_style: "standard" | "karaoke";
-  hook_text: string | null;
+  campaign_brief?: CampaignBrief | null;
+  /** Saved campaign; the backend pins its version and snapshots the brief into the job. */
+  campaign_id?: string | null;
+  campaign_configuration_version?: number | null;
   render_acceleration: "auto";
 }
 
@@ -50,6 +164,20 @@ export interface ProcessingEstimateResponse {
   estimated_processing_seconds: number;
 }
 
+export interface YoutubePreflightResponse {
+  can_start: boolean;
+  status: "ready" | "cookies_missing" | "cooldown";
+  message: string;
+  retry_after_seconds: number;
+  cookies_ready: boolean;
+}
+
+export interface CampaignCompliance {
+  status: "pass" | "review_required" | "blocked";
+  score: number;
+  checks: Array<{ key: string; label: string; status: "pass" | "review_required" | "blocked"; detail: string }>;
+}
+
 export interface JobResponse {
   id: string;
   source_type: "upload" | "youtube_url";
@@ -58,18 +186,21 @@ export interface JobResponse {
   source_size_bytes: number | null;
   processing_options: string | null;
   parent_job_id: string | null;
+  campaign_id?: string | null;
+  campaign_configuration_version?: number | null;
   retry_count: number;
   queue_position: number | null;
   status: JobStatus;
   progress: number;
   error_message: string | null;
+  error_code?: string | null;
   warning_message: string | null;
   stage_metrics_json: string | null;
   stage_estimates_json: string | null;
   automatic_summary_json: string | null;
   stage_metrics: Record<string, number>;
   stage_estimates: Record<string, number>;
-  automatic_summary: Record<string, string | number | boolean>;
+  automatic_summary: Record<string, unknown>;
   estimated_total_seconds: number;
   current_stage_eta_seconds: number;
   current_stage_elapsed_seconds: number;
@@ -88,24 +219,119 @@ export interface JobResponse {
   updated_at: string;
 }
 
+export type ReviewStatus = "suggested" | "accepted" | "rejected" | "edited" | "exported";
+
+export type RejectionReason =
+  | "context_missing"
+  | "weak_moment"
+  | "bad_boundaries"
+  | "transcript_error"
+  | "repeated_content"
+  | "poor_crop"
+  | "other";
+
+export type OutputPreset = JobProcessingOptions["output_preset"];
+export type VisualStyle = JobProcessingOptions["visual_style"];
+
+export interface CaptionStyle {
+  font_size: number;
+  text_color: string;
+  background: "none" | "outline" | "box";
+  background_color: string;
+  position_y: number;
+  max_chars_per_line: number;
+  bold: boolean;
+}
+
+export interface CaptionCue {
+  id: string;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  original_text?: string | null;
+}
+
+/** Canonical edit document shared by the preview and the FFmpeg export. */
+export interface ClipEdit {
+  schema_version: number;
+  trim_start_ms: number;
+  trim_end_ms: number;
+  output_preset: OutputPreset;
+  visual_style: VisualStyle;
+  framing: { focus_x: number; focus_y: number };
+  captions: { enabled: boolean; style: CaptionStyle; cues: CaptionCue[] };
+  audio: { enabled: boolean; normalize: boolean };
+  watermark_enabled: boolean;
+}
+
+export interface CandidateInfo {
+  algorithm_version: string;
+  rank?: number;
+  total?: number;
+  score_meaning: string;
+  signals: Record<string, number>;
+  explanation: string[];
+}
+
+export interface RenderReport {
+  revision: number;
+  rendered_at: string;
+  render_seconds: number;
+  encoder: string;
+  captions_rendered: number;
+  validation: {
+    ok: boolean;
+    checks: Record<string, boolean>;
+    problems: string[];
+    width: number | null;
+    height: number | null;
+    duration_seconds: number | null;
+    has_audio: boolean;
+    size_bytes: number;
+  };
+}
+
 export interface ClipResponse {
   id: string;
   job_id: string;
   start_time: number;
   end_time: number;
-  highlight_score: number;
+  suggested_start_time?: number | null;
+  suggested_end_time?: number | null;
   file_path: string | null;
   title: string | null;
   caption: string | null;
   hashtags: string | null; // JSON-encoded string, parse dengan JSON.parse
   distribution?: DistributionPack | null;
   status: ClipStatus;
+  review_status?: ReviewStatus;
+  review_reason?: RejectionReason | null;
+  position?: number | null;
+  candidate?: CandidateInfo | null;
+  edit?: ClipEdit | null;
+  edit_revision?: number;
+  rendered_revision?: number | null;
+  render_stale?: boolean;
+  render_error_code?: string | null;
+  render_error_message?: string | null;
+  render_report?: RenderReport | null;
+  exported_at?: string | null;
   created_at: string;
+  updated_at?: string | null;
 }
 
 export interface DistributionPack {
   source_name: string | null;
   hashtag_source: "youtube_source_tags+clip_metadata" | "clip_metadata_fallback";
+  campaign?: {
+    id: string;
+    name: string;
+    cta: string | null;
+    mentions: string[];
+    organic_only: boolean;
+    retention_lock: boolean;
+  } | null;
+  compliance?: CampaignCompliance | null;
   youtube: {
     title: string;
     description: string;
@@ -229,12 +455,9 @@ export interface ReleaseInfoResponse {
   features: {
     local_upload: boolean;
     youtube_url: boolean;
-    upload_subtitles: boolean;
-    youtube_subtitles: boolean;
     vertical_crop: boolean;
     youtube_manual_options: boolean;
     youtube_automatic_multi_clip: boolean;
-    youtube_visual_intro_analysis: boolean;
     metadata_language_selector: boolean;
     playwright_e2e: boolean;
     clip_quality_feedback: boolean;

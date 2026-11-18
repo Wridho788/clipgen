@@ -20,12 +20,14 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.config import settings
+from app.core.errors import ErrorCode, PipelineError
 from app.database import SessionLocal, init_db, recover_jobs_after_startup
 from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
 from app.services.maintenance import maintenance_loop
+from app.core.pipeline import gemini_client
 from app.core.pipeline.metadata_gen import test_ollama_connection
-from app.api.routes import auth, videos, jobs, clips, system
+from app.api.routes import auth, videos, jobs, clips, system, campaigns
 
 
 _file_logging_configured = False
@@ -73,11 +75,17 @@ async def lifespan(app: FastAPI):
     
     # 2. Validate dependencies
     try:
-        ollama_ok = test_ollama_connection()
-        if ollama_ok:
-            logger.info("✅ Ollama connection OK")
+        if settings.metadata_provider == "gemini":
+            if settings.gemini_api_key:
+                logger.info(f"✅ Gemini metadata provider configured ({settings.gemini_model_chain})")
+            else:
+                logger.warning("⚠️  GEMINI_API_KEY is missing; metadata generation will fallback")
         else:
-            logger.warning("⚠️  Ollama tidak tersedia, metadata generation akan fallback ke default")
+            ollama_ok = test_ollama_connection()
+            if ollama_ok:
+                logger.info("✅ Ollama connection OK")
+            else:
+                logger.warning("⚠️  Ollama tidak tersedia, metadata generation akan fallback ke default")
     except Exception as e:
         logger.warning(f"⚠️  Ollama check error: {e}")
     
@@ -144,14 +152,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         ).info("HTTP request completed")
         return response
 
-# --- CORS untuk frontend local dev ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Next.js dev ports
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.add_middleware(RequestLoggingMiddleware)
 
 # --- Include routers ---
@@ -160,6 +160,7 @@ app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"])
 
 
 # --- Health check ---
@@ -170,19 +171,19 @@ async def health():
     return {
         "status": "ok",
         "queue": job_queue.status(),
-        "version": app.version,
+        "version": api_app.version,
     }
 
 
 @app.get("/health/live")
 async def liveness():
     """Liveness probe: the HTTP process is responsive."""
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "version": api_app.version}
 
 
 @app.get("/health/ready")
 async def readiness():
-    """Readiness probe: database is reachable; Ollama is reported but optional."""
+    """Readiness probe: database is reachable; metadata provider is optional."""
     database_ready = False
     try:
         with SessionLocal() as db:
@@ -192,19 +193,68 @@ async def readiness():
         logger.error(f"Readiness database check failed: {error}")
 
     ollama_ready = await asyncio.to_thread(test_ollama_connection)
+    # A configured key is not the same as a usable one: the free tier
+    # rejects expired keys and models the key may not call. The check reads
+    # the model endpoint, so it spends no generation quota.
+    gemini_ready = (
+        await asyncio.to_thread(gemini_client.check_connection, settings.gemini_api_key)
+        if settings.metadata_provider == "gemini" and settings.gemini_api_key
+        else False
+    )
     return {
         "status": "ok" if database_ready else "unavailable",
         "database": database_ready,
         "ollama": ollama_ready,
+        "gemini": gemini_ready,
+        "metadata_provider": settings.metadata_provider,
+        "metadata_configured": (
+            gemini_ready
+            if settings.metadata_provider == "gemini"
+            else ollama_ready
+        ),
         "queue": get_job_queue().status(),
     }
 
 
-# --- Global error handler ---
+# --- Error handlers ---
+_PIPELINE_ERROR_STATUS = {
+    ErrorCode.EDIT_CONFLICT: 409,
+    ErrorCode.EDIT_INVALID: 422,
+    ErrorCode.CANDIDATE_BOUNDARY_INVALID: 422,
+    ErrorCode.SOURCE_MISSING: 409,
+    ErrorCode.SOURCE_CORRUPT: 400,
+    ErrorCode.SOURCE_UNSUPPORTED: 400,
+    ErrorCode.AUDIO_MISSING: 400,
+    ErrorCode.SOURCE_TOO_LARGE: 413,
+    ErrorCode.SOURCE_PROBE_TIMEOUT: 504,
+}
+
+
+@app.exception_handler(PipelineError)
+async def pipeline_error_handler(request, exc: PipelineError):
+    """Expose the stable error code next to the human-readable message."""
+    return JSONResponse(
+        status_code=_PIPELINE_ERROR_STATUS.get(exc.code, 500),
+        content={"detail": str(exc), "code": exc.code.value},
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# Wrap the entire error-handling stack: otherwise unhandled 500 responses
+# bypass CORS and the browser reports a misleading network/upload failure.
+api_app = app
+app = CORSMiddleware(
+    app=api_app,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 if __name__ == "__main__":

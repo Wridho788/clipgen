@@ -2,14 +2,24 @@ import {
   AuthConfigResponse,
   AuthSessionResponse,
   AuthUser,
+  CampaignBrief,
+  CampaignCreateRequest,
+  CampaignConfiguration,
+  CampaignDetail,
+  CampaignImportDraft,
+  CampaignSummary,
+  CampaignUpdateRequest,
+  ClipEdit,
   ClipFeedbackResponse,
   ClipResponse,
   ClipUpdateRequest,
   JobProcessingOptions,
+  RejectionReason,
   JobCreateResponse,
   JobResponse,
   JobStatus,
   ProcessingEstimateResponse,
+  YoutubePreflightResponse,
   ReleaseInfoResponse,
   SystemMetricsResponse,
   StorageClearMode,
@@ -25,14 +35,24 @@ export interface UploadProgress {
   percent: number;
 }
 
+/** API failure carrying the HTTP status and the backend's stable error code. */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
     let message = response.statusText;
+    let code: string | undefined;
 
     try {
       if (contentType.includes("application/json")) {
         const data = await response.json();
+        code = typeof data?.code === "string" ? data.code : undefined;
         const detail = data?.detail;
         if (typeof detail === "string") {
           message = detail;
@@ -48,7 +68,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
       message = response.statusText;
     }
 
-    throw new Error(message || `API error ${response.status}`);
+    throw new ApiError(message || `API error ${response.status}`, response.status, code);
   }
 
   if (response.status === 204) return undefined as T;
@@ -75,6 +95,66 @@ function withAccessToken(url: string): string {
 }
 
 export const api = {
+  // --- Campaigns ---
+  listCampaigns: async (includeArchived = false): Promise<CampaignSummary[]> => {
+    const query = includeArchived ? "?include_archived=true" : "";
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns${query}`);
+    return handleResponse(response);
+  },
+
+  getCampaign: async (campaignId: string): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}`);
+    return handleResponse(response);
+  },
+
+  listCampaignVersions: async (campaignId: string): Promise<CampaignConfiguration[]> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}/versions`);
+    return handleResponse(response);
+  },
+
+  analyzeCampaignText: async (text: string): Promise<CampaignImportDraft> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    return handleResponse(response);
+  },
+
+  createCampaign: async (data: CampaignCreateRequest): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+  },
+
+  /** Saves an edit as a new configuration version; older versions are kept. */
+  updateCampaign: async (campaignId: string, data: CampaignUpdateRequest): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+  },
+
+  duplicateCampaign: async (campaignId: string): Promise<CampaignDetail> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}/duplicate`, {
+      method: "POST",
+    });
+    return handleResponse(response);
+  },
+
+  setCampaignArchived: async (campaignId: string, archived: boolean): Promise<CampaignSummary> => {
+    const action = archived ? "archive" : "unarchive";
+    const response = await apiFetch(`${API_BASE_URL}/api/campaigns/${encodeURIComponent(campaignId)}/${action}`, {
+      method: "POST",
+    });
+    return handleResponse(response);
+  },
+
   // --- Videos ---
   uploadVideo: async (
     file: File,
@@ -101,6 +181,11 @@ export const api = {
     return handleResponse(response);
   },
 
+  getYoutubePreflight: async (): Promise<YoutubePreflightResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/videos/youtube/preflight`);
+    return handleResponse(response);
+  },
+
   getProcessingEstimate: async (
     durationSeconds: number,
     sourceType: "upload" | "youtube_url",
@@ -116,14 +201,9 @@ export const api = {
     if (options?.metadata_language) params.set("metadata_language", options.metadata_language);
     if (options?.processing_mode) params.set("processing_mode", options.processing_mode);
     if (options?.crop_vertical !== undefined) params.set("crop_vertical", String(options.crop_vertical));
-    if (options?.generate_highlights !== undefined) params.set("generate_highlights", String(options.generate_highlights));
     if (options?.generate_metadata !== undefined) params.set("generate_metadata", String(options.generate_metadata));
-    if (options?.generate_subtitles !== undefined) params.set("generate_subtitles", String(options.generate_subtitles));
-    if (options?.context_aware !== undefined) params.set("context_aware", String(options.context_aware));
     if (options?.output_preset) params.set("output_preset", options.output_preset);
     if (options?.visual_style) params.set("visual_style", options.visual_style);
-    if (options?.subtitle_style) params.set("subtitle_style", options.subtitle_style);
-    if (options?.hook_text) params.set("hook_text", options.hook_text);
     if (options?.render_acceleration) params.set("render_acceleration", options.render_acceleration);
     const response = await apiFetch(`${API_BASE_URL}/api/videos/estimate?${params.toString()}`);
     return handleResponse(response);
@@ -196,8 +276,55 @@ export const api = {
     await handleResponse(response);
   },
 
-  getClipPreviewUrl: (clipId: string): string =>
-    withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/preview`),
+  saveClipEdit: async (clipId: string, baseRevision: number, edit: ClipEdit): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/edit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_revision: baseRevision, edit }),
+    });
+    return handleResponse(response);
+  },
+
+  renderClip: async (clipId: string): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/render`, { method: "POST" });
+    return handleResponse(response);
+  },
+
+  reviewClip: async (
+    clipId: string,
+    status: "suggested" | "accepted" | "rejected",
+    reason?: RejectionReason,
+  ): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, reason: reason || undefined }),
+    });
+    return handleResponse(response);
+  },
+
+  duplicateClip: async (clipId: string): Promise<ClipResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/${clipId}/duplicate`, { method: "POST" });
+    return handleResponse(response);
+  },
+
+  reorderClips: async (jobId: string, clipIds: string[]): Promise<ClipResponse[]> => {
+    const response = await apiFetch(`${API_BASE_URL}/api/clips/job/${jobId}/order`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_ids: clipIds }),
+    });
+    return handleResponse(response);
+  },
+
+  getClipSourceUrl: (clipId: string): string =>
+    withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/source`),
+
+  /** ``revision`` busts the browser cache after a re-render replaces the file. */
+  getClipPreviewUrl: (clipId: string, revision?: number | null): string => {
+    const query = revision !== undefined && revision !== null ? `?r=${revision}` : "";
+    return withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/preview${query}`);
+  },
 
   getClipDownloadUrl: (clipId: string): string =>
     withAccessToken(`${API_BASE_URL}/api/clips/${clipId}/file`),
@@ -308,29 +435,33 @@ function appendProcessingOptions(formData: FormData, options?: Partial<JobProces
   if (options?.metadata_language) {
     formData.append("metadata_language", options.metadata_language);
   }
+  if (options?.transcript_language) {
+    formData.append("transcript_language", options.transcript_language);
+  }
   if (options?.processing_mode) {
     formData.append("processing_mode", options.processing_mode);
   }
   if (options?.crop_vertical !== undefined) {
     formData.append("crop_vertical", String(options.crop_vertical));
   }
-  if (options?.generate_highlights !== undefined) {
-    formData.append("generate_highlights", String(options.generate_highlights));
-  }
   if (options?.generate_metadata !== undefined) {
     formData.append("generate_metadata", String(options.generate_metadata));
   }
-  if (options?.generate_subtitles !== undefined) {
-    formData.append("generate_subtitles", String(options.generate_subtitles));
-  }
-  if (options?.context_aware !== undefined) {
-    formData.append("context_aware", String(options.context_aware));
+  if (options?.burn_captions !== undefined) {
+    formData.append("burn_captions", String(options.burn_captions));
   }
   if (options?.output_preset) formData.append("output_preset", options.output_preset);
   if (options?.visual_style) formData.append("visual_style", options.visual_style);
-  if (options?.subtitle_style) formData.append("subtitle_style", options.subtitle_style);
-  if (options?.hook_text) formData.append("hook_text", options.hook_text);
   if (options?.render_acceleration) formData.append("render_acceleration", options.render_acceleration);
+  if (options?.campaign_id) {
+    // The backend pins the version and snapshots the brief; sending the brief too is rejected.
+    formData.append("campaign_id", options.campaign_id);
+    if (options.campaign_configuration_version) {
+      formData.append("campaign_configuration_version", String(options.campaign_configuration_version));
+    }
+  } else if (options?.campaign_brief) {
+    formData.append("campaign_brief_json", JSON.stringify(options.campaign_brief));
+  }
 }
 
 function uploadWithProgress(
@@ -353,7 +484,9 @@ function uploadWithProgress(
         percent: Math.min(100, Math.round((event.loaded / event.total) * 100)),
       });
     };
-    request.onerror = () => reject(new Error("Koneksi upload terputus."));
+    request.onerror = () => reject(new Error(
+      "Browser tidak dapat menerima respons upload dari server. Periksa koneksi dan status server, lalu coba lagi.",
+    ));
     request.onabort = () => reject(new Error("Upload dibatalkan."));
     request.onload = () => {
       const body = request.responseText || "";

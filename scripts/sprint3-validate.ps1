@@ -41,14 +41,26 @@ Invoke-Step "Backend performance baseline" {
     curl.exe -f "$BackendUrl/api/system/performance"
 }
 
-Invoke-Step "Backend pytest in container" {
-    docker exec clipgen-backend rm -rf /tmp/clipgen-tests-sprint3
-    docker cp backend/tests clipgen-backend:/tmp/clipgen-tests-sprint3
-    docker exec clipgen-backend python -m pytest /tmp/clipgen-tests-sprint3 -q
+Invoke-Step "Backend pytest in container (unit, API, real-FFmpeg media)" {
+    # Tests are not baked into the image; copy them next to the mounted app
+    # code with pytest.ini so markers, asyncio mode, and imports resolve.
+    docker exec clipgen-backend rm -rf /app/tests
+    docker cp backend/tests clipgen-backend:/app/tests
+    docker cp backend/pytest.ini clipgen-backend:/app/pytest.ini
+    docker exec -w /app clipgen-backend python -m pytest -q
+    if ($LASTEXITCODE -ne 0) { throw "Backend tests failed" }
 }
 
-Invoke-Step "Frontend lint" {
+Invoke-Step "Backend static checks (ruff F/E9)" {
+    docker exec -w /app clipgen-backend python -m ruff check app tests --select F,E9
+    if ($LASTEXITCODE -ne 0) { throw "Ruff found errors" }
+}
+
+Invoke-Step "Frontend lint + type check" {
     pnpm --dir frontend lint
+    if ($LASTEXITCODE -ne 0) { throw "Frontend lint failed" }
+    pnpm --dir frontend exec tsc --noEmit
+    if ($LASTEXITCODE -ne 0) { throw "Frontend type check failed" }
 }
 
 if (-not $SkipFrontendBuild) {

@@ -4,6 +4,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from app.services.youtube_access import clear_youtube_bot_block, record_youtube_bot_block
+
 
 class YouTubeDownloadError(RuntimeError):
     """Download failed after yt-dlp's normal and fallback attempts."""
@@ -16,7 +18,7 @@ def download_youtube_video(
     timeout_seconds: int,
     concurrent_fragments: int = 4,
     max_height: int = 720,
-    cookies_path: Path | None = None,
+    cookies_path: Path | str | None = None,
     user_agent: str | None = None,
 ) -> Path:
     output_template = output_dir / f"{job_id}.%(ext)s"
@@ -36,6 +38,10 @@ def download_youtube_video(
     for attempt_name, extractor_args, attempt_fragments in attempts:
         cmd = [
             "yt-dlp",
+            # This app pins yt-dlp in requirements.txt and updates it during a
+            # deliberate image rebuild. Avoid leaking its update notice into a
+            # user-facing download failure.
+            "--no-update",
             "--no-playlist",
             "--no-progress",
             "--retries", "3",
@@ -76,6 +82,7 @@ def download_youtube_video(
         if result.returncode == 0:
             downloaded_path = _find_downloaded_path(result.stdout, output_dir, job_id)
             if downloaded_path:
+                clear_youtube_bot_block()
                 return downloaded_path
             errors.append("yt-dlp selesai tetapi file output tidak ditemukan")
             continue
@@ -83,6 +90,16 @@ def download_youtube_video(
         detail = (result.stderr or result.stdout).strip()
         errors.append(detail[-600:])
         logger.warning(f"yt-dlp attempt failed for job {job_id}: {detail[-600:]}")
+        # A 429/bot challenge is generally scoped to the current IP/session.
+        # Extra playback clients cannot solve it and only add requests, even
+        # when an expired or rejected cookie was supplied. Persist a local
+        # hold so future jobs are stopped before touching YouTube.
+        if _is_rate_limited_or_bot_block(detail):
+            record_youtube_bot_block(cookies_path=cookie_file)
+            logger.warning(
+                f"YouTube rate-limit/bot block for job {job_id}; stopping fallback attempts"
+            )
+            break
         if not _should_retry_with_fallback(detail):
             break
 
@@ -117,6 +134,11 @@ def _should_retry_with_fallback(detail: str) -> bool:
         indicator in normalized
         for indicator in (
             "http error 403",
+            "http error 429",
+            "too many requests",
+            "sign in to confirm you're not a bot",
+            "missing required visitor data",
+            "unable to fetch gvs po token",
             "precondition check failed",
             "http error 400",
             "requested format is not available",
@@ -127,8 +149,39 @@ def _should_retry_with_fallback(detail: str) -> bool:
     )
 
 
+def _is_rate_limited_or_bot_block(detail: str) -> bool:
+    # yt-dlp/YouTube can render "you're" with either ASCII or typographic
+    # apostrophes depending on the response client. Normalize those variants
+    # before matching so the user gets actionable guidance instead of raw
+    # stderr.
+    normalized = detail.lower().replace("’", "'").replace("‘", "'")
+    return any(
+        indicator in normalized
+        for indicator in (
+            "http error 429",
+            "too many requests",
+            "sign in to confirm you're not a bot",
+            "missing required visitor data",
+            "unable to fetch gvs po token",
+        )
+    )
+
+
 def _friendly_error(detail: str, used_cookies: bool = False) -> str:
     normalized = detail.lower()
+    if _is_rate_limited_or_bot_block(detail):
+        follow_up = (
+            "Cookies browser sudah dipakai; buka video di browser pada jaringan yang sama, "
+            "selesaikan verifikasi bila diminta, lalu export ulang cookies Netscape dan coba lagi."
+            if used_cookies
+            else "Tunggu sampai rate-limit reda atau konfigurasi cookies Netscape yang fresh dari browser "
+            "pada jaringan yang sama melalui YOUTUBE_COOKIES_PATH."
+        )
+        return (
+            "YouTube sedang memblokir sesi/IP sebagai bot (HTTP 429). ClipGen menghentikan retry otomatis "
+            "agar blokir tidak makin parah. "
+            f"{follow_up}"
+        )
     if "http error 403" in normalized:
         follow_up = (
             "Cookie browser sudah dipakai; buka video tersebut di browser pada jaringan yang sama, "
@@ -152,12 +205,16 @@ def _friendly_error(detail: str, used_cookies: bool = False) -> str:
     return f"YouTube download gagal: {detail[:300]}"
 
 
-def _usable_cookie_file(cookies_path: Path | None) -> Path | None:
+def _usable_cookie_file(cookies_path: Path | str | None) -> Path | None:
     if cookies_path is None:
         return None
-    if cookies_path.is_file():
-        return cookies_path
-    logger.warning(f"YouTube cookies path tidak ditemukan, melanjutkan tanpa cookies: {cookies_path}")
+    raw_path = str(cookies_path).strip()
+    if not raw_path or raw_path == ".":
+        return None
+    path = Path(raw_path)
+    if path.is_file():
+        return path
+    logger.warning(f"YouTube cookies path tidak ditemukan, melanjutkan tanpa cookies: {path}")
     return None
 
 

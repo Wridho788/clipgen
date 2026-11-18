@@ -260,11 +260,23 @@ def _append_watermark(
         "top_right": (f"w-tw-{margin}", str(margin)),
         "top_left": (str(margin), str(margin)),
     }.get(position or settings.watermark_position, (f"w-tw-{margin}", f"h-th-{margin}"))
-    drawtext = (
-        f"drawtext=text='{escaped}':fontcolor=white@{alpha:.2f}:fontsize={fontsize}:"
-        f"x={x}:y={y}:box=1:boxcolor=black@0.25:boxborderw=8"
-    )
-    return f"{filter_graph},{drawtext}"
+    # An explicit font file avoids fontconfig, which some FFmpeg builds
+    # (notably on Windows) cannot use.
+    options = [f"text='{escaped}'"]
+    font_file = (settings.render_font_file or "").strip()
+    if font_file:
+        escaped_font = font_file.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+        options.insert(0, f"fontfile='{escaped_font}'")
+    options += [
+        f"fontcolor=white@{alpha:.2f}",
+        f"fontsize={fontsize}",
+        f"x={x}",
+        f"y={y}",
+        "box=1",
+        "boxcolor=black@0.25",
+        "boxborderw=8",
+    ]
+    return f"{filter_graph},drawtext={':'.join(options)}"
 
 
 def _escape_drawtext_text(value: str) -> str:

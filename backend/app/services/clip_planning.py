@@ -1,4 +1,4 @@
-"""Adaptive candidate count planning for automatic short-form jobs."""
+"""Adaptive output clip count planning for short-form jobs."""
 from __future__ import annotations
 
 
@@ -9,11 +9,10 @@ def resolve_clip_count(
     minimum: int = 1,
     maximum: int = 12,
 ) -> int:
-    """Respect an explicit count; otherwise derive a sensible candidate count.
+    """Respect an explicit count; otherwise derive a clip count from duration.
 
-    One candidate per roughly eight minutes keeps short videos lightweight while
-    letting longer sources surface more than a fixed five moments. Highlight
-    scoring can still return fewer clips when the material is weak.
+    One clip per roughly eight minutes keeps short videos lightweight while
+    allowing longer sources to produce more evenly spaced clip windows.
     """
     if requested_count > 0:
         return max(minimum, min(maximum, int(requested_count)))

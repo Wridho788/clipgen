@@ -5,13 +5,14 @@ Routes: GET /api/clips, GET /api/clips/{id}, PATCH /api/clips/{id},
 import asyncio
 import json
 import re
+import shutil
 import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from sqlalchemy import func
@@ -21,32 +22,68 @@ from app.config import settings
 from app.core.security import get_current_user
 from app.database import get_db
 from app.models import Clip, ClipFeedback, Job, User
+from app.api.media_response import media_file_response
+from app.core.errors import ErrorCode, PipelineError
 from app.core.pipeline.metadata_gen import generate_metadata
+from app.core.timeline import seconds_to_ms
 from app.schemas import (
+    ClipEditSaveRequest,
     ClipFeedbackRequest,
     ClipFeedbackResponse,
+    ClipOrderRequest,
     ClipResponse,
+    ClipReviewRequest,
     ClipTrimRequest,
     ClipUpdateRequest,
+    JobProcessingOptions,
+    default_processing_options,
 )
 from loguru import logger
-from app.services.clip_render_service import enqueue_clip_trim
+from app.services.clip_editing import (
+    candidate_payload,
+    is_render_stale,
+    load_edit,
+    mark_exported,
+    save_edit,
+    set_review,
+    store_edit,
+)
+from app.services.clip_render_service import enqueue_clip_render
 from app.services.distribution_metadata import build_distribution_pack
 from app.services.source_metadata import load_youtube_reference_hashtags
+from app.services.campaign_compliance import evaluate_campaign_compliance
 
 router = APIRouter()
 
 
 @router.get("/job/{job_id}", response_model=List[ClipResponse])
-async def list_clips_by_job(
+def list_clips_by_job(
     job_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """List semua clip dari satu job."""
     job = _get_owned_job(db, job_id, current_user)
-    clips = db.query(Clip).filter(Clip.job_id == job_id).order_by(Clip.created_at).all()
+    clips = _ordered_clips(db, job_id)
     return [_clip_response(clip, job) for clip in clips]
+
+
+@router.post("/job/{job_id}/order", response_model=List[ClipResponse])
+def reorder_clips(
+    job_id: str,
+    data: ClipOrderRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist a user-chosen candidate order."""
+    job = _get_owned_job(db, job_id, current_user)
+    clips = {clip.id: clip for clip in db.query(Clip).filter(Clip.job_id == job_id).all()}
+    if set(data.clip_ids) != set(clips) or len(data.clip_ids) != len(clips):
+        raise HTTPException(status_code=422, detail="Urutan harus berisi semua clip job ini tepat satu kali")
+    for index, clip_id in enumerate(data.clip_ids, start=1):
+        clips[clip_id].position = index
+    db.commit()
+    return [_clip_response(clip, job) for clip in _ordered_clips(db, job_id)]
 
 
 @router.get("/job/{job_id}/archive")
@@ -55,15 +92,13 @@ async def download_job_archive(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Build a ZIP with all ready clips from a job for one-click export."""
-    job = _get_owned_job(db, job_id, current_user)
+    """Build a ZIP with all ready, non-rejected clips in the user's order."""
+    _get_owned_job(db, job_id, current_user)  # ownership check
 
-    clips = (
-        db.query(Clip)
-        .filter(Clip.job_id == job_id, Clip.status == "ready")
-        .order_by(Clip.created_at)
-        .all()
-    )
+    clips = [
+        clip for clip in _ordered_clips(db, job_id)
+        if clip.status == "ready" and clip.review_status != "rejected"
+    ]
     valid_clips = [clip for clip in clips if clip.file_path and Path(clip.file_path).exists()]
     if not valid_clips:
         raise HTTPException(status_code=409, detail="Belum ada clip siap untuk diunduh")
@@ -72,6 +107,9 @@ async def download_job_archive(
     archive_dir.mkdir(parents=True, exist_ok=True)
     archive_path = archive_dir / f"clipgen-{job_id}-{uuid.uuid4().hex}.zip"
     await asyncio.to_thread(_build_job_archive, archive_path, valid_clips)
+    for clip in valid_clips:
+        mark_exported(clip)
+    db.commit()
 
     return FileResponse(
         path=archive_path,
@@ -82,7 +120,7 @@ async def download_job_archive(
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)
-async def get_clip(
+def get_clip(
     clip_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -146,6 +184,7 @@ async def regenerate_clip_metadata(
         transcript_text,
         _metadata_language_for_job(job),
         reference_hashtags,
+        _campaign_brief_for_job(job),
     )
     clip.title = metadata.get("title")
     clip.caption = metadata.get("caption")
@@ -171,7 +210,6 @@ async def delete_clip(
 
     # Delete file
     if clip.file_path:
-        from pathlib import Path
         file_path = Path(clip.file_path)
         try:
             file_path.unlink()
@@ -192,29 +230,14 @@ async def download_clip(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Download clip video file.
-    
-    Return: MP4 file sebagai binary stream.
-    Browser akan trigger download atau bisa juga embed di <video> tag.
-    """
+    """Download the exported MP4 and record the export for review metrics."""
     clip = _get_owned_clip(db, clip_id, current_user)
-
-    if not clip.file_path:
-        raise HTTPException(status_code=400, detail="Clip belum siap (file_path kosong)")
-
-    from pathlib import Path
-    file_path = Path(clip.file_path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File clip tidak ditemukan di storage")
-
-    # Filename untuk download
-    filename = _safe_download_filename(clip.title)
-    filename = f"{filename}.mp4"
-
+    file_path = _ready_file(clip)
+    mark_exported(clip)
+    db.commit()
     return FileResponse(
         path=file_path,
-        filename=filename,
+        filename=f"{_safe_download_filename(clip.title)}.mp4",
         media_type="video/mp4",
     )
 
@@ -222,29 +245,34 @@ async def download_clip(
 @router.get("/{clip_id}/preview")
 async def preview_clip(
     clip_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Stream clip untuk preview di web player.
-    Same file, but dengan Content-Range header support untuk seeking.
-    
-    (FastAPI + Starlette automatically handle streaming + range requests)
-    """
+    """Stream the rendered clip with byte-range support for seeking."""
     clip = _get_owned_clip(db, clip_id, current_user)
+    return media_file_response(request, _ready_file(clip))
 
-    if not clip.file_path:
-        raise HTTPException(status_code=400, detail="Clip belum siap (file_path kosong)")
 
-    from pathlib import Path
-    file_path = Path(clip.file_path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File clip tidak ditemukan")
-
-    return FileResponse(
-        path=file_path,
-        media_type="video/mp4",
-    )
+@router.get("/{clip_id}/source")
+async def stream_clip_source(
+    clip_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream the original source so the editor can preview unsaved-to-file edits live."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    job = _get_owned_job(db, clip.job_id, current_user)
+    source = Path(job.source_path)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="File sumber tidak tersedia")
+    media_type = {
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+        ".mov": "video/quicktime",
+    }.get(source.suffix.lower(), "video/mp4")
+    return media_file_response(request, source, media_type)
 
 
 @router.get("/{clip_id}/feedback", response_model=ClipFeedbackResponse)
@@ -304,21 +332,126 @@ async def trim_clip(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Queue a re-render for a user-adjusted source range."""
+    """Backward-compatible trim: updates the saved edit, then re-renders it."""
     clip = _get_owned_clip(db, clip_id, current_user)
     job = _get_owned_job(db, clip.job_id, current_user)
     if job.source_duration_seconds and data.end_time > job.source_duration_seconds:
         raise HTTPException(status_code=422, detail="Timestamp akhir melebihi durasi video sumber")
-    if not Path(job.source_path).exists():
-        raise HTTPException(status_code=409, detail="File sumber tidak tersedia untuk membuat trim baru")
-
-    clip.start_time = data.start_time
-    clip.end_time = data.end_time
+    _require_source(job)
+    edit = load_edit(clip, job).model_copy(
+        update={"trim_start_ms": seconds_to_ms(data.start_time), "trim_end_ms": seconds_to_ms(data.end_time)}
+    )
+    save_edit(clip, job, edit, int(clip.edit_revision or 0))
     clip.status = "processing"
     db.commit()
     db.refresh(clip)
-    await enqueue_clip_trim(clip.id)
+    await enqueue_clip_render(clip.id)
     return _clip_response(clip, job)
+
+
+@router.put("/{clip_id}/edit", response_model=ClipResponse)
+def save_clip_edit(
+    clip_id: str,
+    data: ClipEditSaveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Autosave the canonical edit. Stale ``base_revision`` returns 409 EDIT_CONFLICT."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    job = _get_owned_job(db, clip.job_id, current_user)
+    save_edit(clip, job, data.edit, data.base_revision)
+    db.commit()
+    db.refresh(clip)
+    return _clip_response(clip, job)
+
+
+@router.post("/{clip_id}/render", response_model=ClipResponse, status_code=202)
+async def render_clip(
+    clip_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Queue an export of the *saved* edit revision (never transient UI state)."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    job = _get_owned_job(db, clip.job_id, current_user)
+    _require_source(job)
+    if clip.status == "processing":
+        raise HTTPException(status_code=409, detail="Render clip ini masih berjalan")
+    if clip.edit_json is None:
+        store_edit(clip, load_edit(clip, job))
+        clip.edit_revision = int(clip.edit_revision or 0) + 1
+    clip.status = "processing"
+    clip.render_error_code = None
+    clip.render_error_message = None
+    db.commit()
+    db.refresh(clip)
+    await enqueue_clip_render(clip.id)
+    return _clip_response(clip, job)
+
+
+@router.post("/{clip_id}/review", response_model=ClipResponse)
+def review_clip(
+    clip_id: str,
+    data: ClipReviewRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Accept, reject (with a reason code), or reset a candidate."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    set_review(clip, data.status, data.reason)
+    db.commit()
+    db.refresh(clip)
+    return _clip_response(clip)
+
+
+@router.post("/{clip_id}/duplicate", response_model=ClipResponse, status_code=201)
+def duplicate_clip(
+    clip_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Copy a candidate (edit, metadata, and current file) to try an alternative."""
+    clip = _get_owned_clip(db, clip_id, current_user)
+    job = _get_owned_job(db, clip.job_id, current_user)
+    edit = load_edit(clip, job)
+    copy = Clip(
+        job_id=clip.job_id,
+        start_time=clip.start_time,
+        end_time=clip.end_time,
+        suggested_start_time=clip.suggested_start_time,
+        suggested_end_time=clip.suggested_end_time,
+        highlight_score=clip.highlight_score,
+        analysis_json=clip.analysis_json,
+        algorithm_version=clip.algorithm_version,
+        review_status="suggested",
+        edit_revision=1,
+        title=f"{clip.title} (salinan)" if clip.title else None,
+        caption=clip.caption,
+        hashtags=clip.hashtags,
+        status="ready" if clip.file_path else clip.status,
+    )
+    store_edit(copy, edit)
+    db.add(copy)
+    db.flush()
+    if clip.file_path and Path(clip.file_path).exists():
+        target = settings.clips_dir / f"{copy.id}_r1.mp4"
+        shutil.copy2(clip.file_path, target)
+        copy.file_path = str(target)
+        copy.rendered_revision = 1 if not is_render_stale(clip) else 0
+        copy.render_report_json = clip.render_report_json
+    else:
+        copy.file_path = None
+        copy.status = "failed"
+    siblings = _ordered_clips(db, clip.job_id)
+    order = [item.id for item in siblings if item.id != copy.id]
+    order.insert(order.index(clip.id) + 1, copy.id)
+    by_id = {item.id: item for item in siblings}
+    by_id[copy.id] = copy
+    for index, item_id in enumerate(order, start=1):
+        by_id[item_id].position = index
+    db.commit()
+    db.refresh(copy)
+    return _clip_response(copy, job)
 
 
 def _clip_response(clip: Clip, job: Job | None = None) -> ClipResponse:
@@ -333,17 +466,60 @@ def _clip_response(clip: Clip, job: Job | None = None) -> ClipResponse:
         if job and job.source_type == "youtube_url"
         else []
     )
+    campaign_brief = _campaign_brief_for_job(job)
+    effective_tags = tags if isinstance(tags, list) else []
+    distribution = build_distribution_pack(
+        clip.title,
+        clip.caption,
+        effective_tags,
+        source_reference_hashtags=reference_tags,
+        source_name=job.source_name if job else None,
+        campaign_brief=campaign_brief,
+    )
+    compliance = evaluate_campaign_compliance(
+        campaign_brief,
+        transcript_text=_get_clip_transcript_text(job, clip),
+        title=clip.title,
+        caption=clip.caption,
+        hashtags=[*effective_tags, *(campaign_brief.hashtags if campaign_brief else [])],
+        duration_seconds=max(0.0, clip.end_time - clip.start_time),
+    )
+    if compliance is not None:
+        distribution["compliance"] = compliance
+    try:
+        render_report = json.loads(clip.render_report_json or "null")
+    except json.JSONDecodeError:
+        render_report = None
     return ClipResponse.model_validate(clip).model_copy(
         update={
-            "distribution": build_distribution_pack(
-                clip.title,
-                clip.caption,
-                tags if isinstance(tags, list) else [],
-                source_reference_hashtags=reference_tags,
-                source_name=job.source_name if job else None,
-            )
+            "distribution": distribution,
+            "candidate": candidate_payload(clip),
+            "edit": load_edit(clip, job),
+            "edit_revision": int(clip.edit_revision or 0),
+            "render_stale": is_render_stale(clip),
+            "render_report": render_report if isinstance(render_report, dict) else None,
+            "review_status": clip.review_status or "suggested",
         }
     )
+
+
+def _ordered_clips(db: Session, job_id: str) -> list[Clip]:
+    clips = db.query(Clip).filter(Clip.job_id == job_id).order_by(Clip.created_at).all()
+    return sorted(clips, key=lambda clip: (clip.position is None, clip.position or 0))
+
+
+def _ready_file(clip: Clip) -> Path:
+    if not clip.file_path:
+        raise HTTPException(status_code=400, detail="Clip belum siap (file_path kosong)")
+    file_path = Path(clip.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File clip tidak ditemukan di storage")
+    return file_path
+
+
+def _require_source(job: Job) -> None:
+    if not Path(job.source_path).exists():
+        raise PipelineError(ErrorCode.SOURCE_MISSING, message="File sumber tidak tersedia untuk membuat render baru")
 
 
 def _get_owned_job(db: Session, job_id: str, current_user: User) -> Job:
@@ -427,3 +603,17 @@ def _metadata_language_for_job(job: Job | None) -> str:
     except json.JSONDecodeError:
         return "id"
     return "en" if isinstance(options, dict) and options.get("metadata_language") == "en" else "id"
+
+
+def _campaign_brief_for_job(job: Job | None):
+    if not job:
+        return None
+    try:
+        stored = json.loads(job.processing_options or "{}")
+        if not isinstance(stored, dict) or not stored.get("campaign_brief"):
+            return None
+        defaults = default_processing_options().model_dump()
+        options = JobProcessingOptions.model_validate({**defaults, **stored})
+        return options.campaign_brief
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None

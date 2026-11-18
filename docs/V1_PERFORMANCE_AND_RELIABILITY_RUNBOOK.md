@@ -10,11 +10,11 @@ Docker Desktop aktif; jangan restart ketika ada job aktif.
 | --- | --- | --- |
 | Capability perangkat | Probe CTranslate2 CUDA + encode NVENC satu frame, lalu cache. Encoder FFmpeg yang sekadar tercantum tidak dianggap GPU. | Selesai di kode |
 | Mode akselerasi | Tidak ada pemilih CPU/GPU. Semua job memakai `auto`; UI menampilkan label runtime sebenarnya. | Selesai di kode |
-| Transkripsi | `word_timestamps` hanya aktif untuk subtitle, CPU thread dapat diatur, ETA diperbarui dari throughput aktual. | Selesai di kode |
+| Transkripsi | Timestamp per kata tidak dihitung; CPU thread dapat diatur dan ETA diperbarui dari throughput aktual. | Selesai di kode |
 | Render | Cut + reframe + style menjadi satu proses FFmpeg untuk output sosial; blur CPU memakai background resolusi lebih kecil; fallback CPU valid. | Selesai di kode |
 | Progress | Progress ditimbang dari estimate tahap aktual, bukan band 30–49%; heartbeat untuk transkripsi dan FFmpeg. | Selesai di kode |
-| Perencanaan klip | Jumlah kandidat dan panjang klip bersifat adaptif; bukan selalu lima klip atau 15 detik. | Selesai di kode |
-| Observability | Halaman job memperlihatkan elapsed/ETA/device; endpoint performance mengelompokkan hasil per preset/style/subtitle; skrip benchmark JSON tersedia. | Selesai di kode |
+| Perencanaan klip | Klip memakai jendela durasi tetap yang tersebar merata sepanjang video. | Selesai di kode |
+| Observability | Halaman job memperlihatkan elapsed/ETA/device; endpoint performance mengelompokkan hasil per preset/style; skrip benchmark JSON tersedia. | Selesai di kode |
 | Smoke/benchmark Docker | Jalankan perintah validasi di bawah. | Menunggu runtime |
 
 ## Baseline masalah yang diperbaiki
@@ -126,8 +126,8 @@ tidak dapat memindahkan bind-mounted file secara andal ke Windows Recycle Bin.
 
 ## Go / no-go V1
 
-Go apabila CPU-only job tidak pernah menulis `NVENC render failed`, subtitle
-nonaktif tidak menghasilkan word timestamp, heartbeat tetap diperbarui, dan
+Go apabila CPU-only job tidak pernah menulis `NVENC render failed`, transkripsi
+tidak menghitung timestamp per kata, heartbeat tetap diperbarui, dan
 benchmark dapat direkam. No-go bila label GPU muncul tanpa CUDA/NVENC yang
 benar-benar usable, ETA tetap menggunakan band statis, atau fallback encoder
 gagal karena opsi NVENC terbawa ke `libx264`.

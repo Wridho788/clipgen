@@ -9,26 +9,20 @@ export const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
 export const ACTIVE_JOB_STATUSES = new Set<JobStatus>([
   "pending",
   "downloading",
-  "analyzing_intro",
   "extracting",
   "transcribing",
-  "detecting",
   "cutting",
   "cropping",
-  "subtitling",
   "generating_metadata",
 ]);
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   pending: "Menunggu",
   downloading: "Mengunduh YouTube",
-  analyzing_intro: "Analisis intro video",
   extracting: "Ekstrak audio",
   transcribing: "Transkripsi",
-  detecting: "Deteksi highlight",
   cutting: "Potong klip",
   cropping: "Reframe & style",
-  subtitling: "Subtitle & hook",
   generating_metadata: "Metadata",
   done: "Selesai",
   failed: "Gagal",
@@ -36,19 +30,16 @@ export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
 };
 
 export const JOB_STATUS_TONES: Record<JobStatus, string> = {
-  pending: "border-slate-200 bg-slate-50 text-slate-700",
-  downloading: "border-sky-200 bg-sky-50 text-sky-700",
-  analyzing_intro: "border-violet-200 bg-violet-50 text-violet-700",
-  extracting: "border-blue-200 bg-blue-50 text-blue-700",
-  transcribing: "border-cyan-200 bg-cyan-50 text-cyan-700",
-  detecting: "border-amber-200 bg-amber-50 text-amber-700",
-  cutting: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  cropping: "border-violet-200 bg-violet-50 text-violet-700",
-  subtitling: "border-teal-200 bg-teal-50 text-teal-700",
-  generating_metadata: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700",
-  done: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  failed: "border-rose-200 bg-rose-50 text-rose-700",
-  cancelled: "border-zinc-200 bg-zinc-50 text-zinc-600",
+  pending: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-400/30 dark:bg-slate-400/10 dark:text-slate-200",
+  downloading: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-400/30 dark:bg-sky-400/10 dark:text-sky-200",
+  extracting: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/30 dark:bg-blue-400/10 dark:text-blue-200",
+  transcribing: "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-400/30 dark:bg-cyan-400/10 dark:text-cyan-200",
+  cutting: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-400/30 dark:bg-indigo-400/10 dark:text-indigo-200",
+  cropping: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-400/30 dark:bg-violet-400/10 dark:text-violet-200",
+  generating_metadata: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-400/30 dark:bg-fuchsia-400/10 dark:text-fuchsia-200",
+  done: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200",
+  failed: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200",
+  cancelled: "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-400/30 dark:bg-zinc-400/10 dark:text-zinc-200",
 };
 
 export function isTerminalJobStatus(status: JobStatus | undefined): boolean {

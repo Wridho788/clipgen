@@ -1,5 +1,5 @@
 """
-Stage 7: Generate metadata (title, caption, hashtags) menggunakan Ollama lokal.
+Stage 7: Generate metadata (title, caption, hashtags) menggunakan Ollama atau Gemini.
 
 Ollama setup:
   1. Download Ollama dari ollama.ai
@@ -15,12 +15,15 @@ import requests
 from loguru import logger
 
 from app.config import settings
+from app.core.pipeline import gemini_client
+from app.schemas import CampaignBrief
 
 
 def generate_metadata(
     transcript_text: str,
     language: str = "id",
     reference_hashtags: list[str] | None = None,
+    campaign_brief: CampaignBrief | None = None,
 ) -> dict:
     """
     Generate title, caption, dan hashtag dari transcript.
@@ -39,24 +42,31 @@ def generate_metadata(
     defaults = _default_metadata(language)
     if not transcript_text or len(transcript_text.strip()) < 10:
         logger.warning("Transcript terlalu pendek, return default metadata")
-        return _with_reference_hashtags(defaults, reference_hashtags)
+        return _apply_campaign_brief(_with_reference_hashtags(defaults, reference_hashtags), campaign_brief)
 
     try:
-        response = _call_ollama(transcript_text, language)
+        if settings.metadata_provider == "gemini":
+            response = _call_gemini(transcript_text, language, campaign_brief)
+        else:
+            response = _call_ollama(transcript_text, language, campaign_brief)
         parsed = _parse_response(response, language)
-        return _with_reference_hashtags(parsed, reference_hashtags)
+        return _apply_campaign_brief(_with_reference_hashtags(parsed, reference_hashtags), campaign_brief)
     except Exception as e:
         logger.error(f"Metadata generation error: {e}")
         # Fallback: extract title dari first sentence
         first_sentence = transcript_text.split(".")[0][:50]
-        return _with_reference_hashtags({
+        return _apply_campaign_brief(_with_reference_hashtags({
             "title": first_sentence or defaults["title"],
             "caption": transcript_text[:100],
             "hashtags": ["content"],
-        }, reference_hashtags)
+        }, reference_hashtags), campaign_brief)
 
 
-def _call_ollama(transcript_text: str, language: str = "id") -> str:
+def _call_ollama(
+    transcript_text: str,
+    language: str = "id",
+    campaign_brief: CampaignBrief | None = None,
+) -> str:
     """Call Ollama API untuk generate metadata."""
     language = _normalize_language(language)
     if language == "en":
@@ -84,6 +94,9 @@ Berikan response dalam format JSON dengan field:
 
 JSON saja, tanpa teks tambahan."""
 
+    if campaign_brief:
+        prompt += _campaign_instructions(campaign_brief, language)
+
     payload = {
         "model": settings.ollama_model,
         "prompt": prompt,
@@ -109,6 +122,62 @@ JSON saja, tanpa teks tambahan."""
 
     result = response.json()
     return result.get("response", "")
+
+
+def _call_gemini(
+    transcript_text: str,
+    language: str = "id",
+    campaign_brief: CampaignBrief | None = None,
+) -> str:
+    """Call Gemini generateContent. The API key stays in a request header.
+
+    The free tier is unreliable for any single model, so the shared client
+    walks a fallback chain of models and retries transient failures.
+    """
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY belum dikonfigurasi")
+
+    language = _normalize_language(language)
+    if language == "en":
+        prompt = f"""Extract social media metadata from this audio segment in English:
+
+Transcript:
+{transcript_text}
+
+Return JSON only with these fields:
+- title (5-10 catchy, memorable words)
+- caption (30-50 words that describe the content and invite engagement)
+- hashtags (a list of 5-7 relevant hashtags, without the # symbol)
+
+Do not add claims or context that are not present in the transcript."""
+    else:
+        prompt = f"""Extract metadata dari segmen audio ini dalam Bahasa Indonesia:
+
+Transkrip:
+{transcript_text}
+
+Berikan JSON saja dengan field:
+- title (5-10 kata, menarik dan mudah diingat)
+- caption (30-50 kata yang menjelaskan konten dan mengajak interaksi)
+- hashtags (list 5-7 hashtag relevan, tanpa simbol #)
+
+Jangan menambah klaim atau konteks yang tidak ada di transkrip."""
+
+    if campaign_brief:
+        prompt += _campaign_instructions(campaign_brief, language)
+
+    logger.info(f"Calling Gemini (chain: {settings.gemini_model_chain})")
+    result = gemini_client.generate_text(
+        prompt,
+        api_key=settings.gemini_api_key,
+        model_chain=settings.gemini_model_chain,
+        timeout_seconds=settings.gemini_timeout_seconds,
+        max_attempts_per_model=settings.gemini_max_attempts_per_model,
+        backoff_seconds=settings.gemini_retry_backoff_seconds,
+        json_mode=True,
+    )
+    logger.info(f"Gemini answered with {result.model} after {result.attempts} attempt(s)")
+    return result.text
 
 
 def _parse_response(response_text: str, language: str = "id") -> dict:
@@ -173,6 +242,35 @@ def _with_reference_hashtags(metadata: dict, reference_hashtags: list[str] | Non
         return metadata
     merged = _normalize_hashtags([*reference_hashtags, *(metadata.get("hashtags") or [])])
     return {**metadata, "hashtags": merged[:7]}
+
+
+def _campaign_instructions(brief: CampaignBrief, language: str) -> str:
+    required_tags = ", ".join(f"#{tag}" for tag in brief.hashtags) or "tidak ada"
+    prohibited = ", ".join(brief.prohibited_terms) or "tidak ada"
+    phrases = ", ".join(brief.required_phrases) or "tidak ada"
+    cta = brief.cta or "tidak ada"
+    return f"""
+
+Campaign brief (ikuti dengan ketat):
+- Campaign: {brief.name}
+- Gaya judul: {brief.title_style}; tetap menarik tetapi tidak boleh menyesatkan.
+- CTA yang harus ada bila relevan: {cta}
+- Hashtag wajib: {required_tags}
+- Frasa wajib yang harus benar-benar ada di source: {phrases}
+- Kata/tema terlarang: {prohibited}
+- Jangan membuat klaim, kutipan, atau konteks yang tidak ada di transcript.
+Bahasa output: {"English" if language == "en" else "Bahasa Indonesia"}.
+"""
+
+
+def _apply_campaign_brief(metadata: dict, brief: CampaignBrief | None) -> dict:
+    if not brief:
+        return metadata
+    hashtags = _normalize_hashtags([*(metadata.get("hashtags") or []), *brief.hashtags])
+    caption = str(metadata.get("caption") or "").strip()
+    if brief.cta and brief.cta.casefold() not in caption.casefold():
+        caption = f"{caption.rstrip()}\n\n{brief.cta}".strip()
+    return {**metadata, "caption": caption[:500], "hashtags": hashtags[:15]}
 
 
 def test_ollama_connection() -> bool:

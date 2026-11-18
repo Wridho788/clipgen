@@ -1,0 +1,116 @@
+[
+ {
+  "start": 0.0,
+  "end": 6.0,
+  "text": "Welcome back to the show. Today we are talking about how small teams ship reliable software.",
+  "words": []
+ },
+ {
+  "start": 7.2,
+  "end": 12.72,
+  "text": "So here is the question everyone asks me. Why do most side projects never launch?",
+  "words": []
+ },
+ {
+  "start": 14.0,
+  "end": 18.24,
+  "text": "The honest answer is that people build features before they build a habit of finishing.",
+  "words": []
+ },
+ {
+  "start": 19.52,
+  "end": 26.72,
+  "text": "When I started, I rewrote my app three times. Each rewrite felt productive, but nobody ever used it.",
+  "words": []
+ },
+ {
+  "start": 26.72,
+  "end": 33.2,
+  "text": "What changed everything was a simple rule. Ship one small thing every single week.",
+  "words": []
+ },
+ {
+  "start": 34.48,
+  "end": 40.24,
+  "text": "That rule forced me to cut scope, write tests for the risky parts, and talk to real users.",
+  "words": []
+ },
+ {
+  "start": 41.52,
+  "end": 44.4,
+  "text": "Let me give you a concrete example from last month.",
+  "words": []
+ },
+ {
+  "start": 45.68,
+  "end": 49.2,
+  "text": "We had a video export bug that only happened on long files.",
+  "words": []
+ },
+ {
+  "start": 50.16,
+  "end": 55.52,
+  "text": "Instead of guessing, we measured it. It turned out the encoder was fine.",
+  "words": []
+ },
+ {
+  "start": 56.4,
+  "end": 60.08,
+  "text": "The real problem was a timestamp rounding error of a few milliseconds.",
+  "words": []
+ },
+ {
+  "start": 61.6,
+  "end": 67.28,
+  "text": "Fixing that took 10 minutes. Finding it took two days, because we had no logs.",
+  "words": []
+ },
+ {
+  "start": 68.64,
+  "end": 74.32,
+  "text": "So my advice is this. Before you optimize anything, make the failure visible.",
+  "words": []
+ },
+ {
+  "start": 75.52,
+  "end": 81.44,
+  "text": "Another mistake I see is trusting a single score. A high score does not mean people will watch.",
+  "words": []
+ },
+ {
+  "start": 81.6,
+  "end": 87.76,
+  "text": "You have to look at what viewers actually do, and you have to accept that luck plays a part.",
+  "words": []
+ },
+ {
+  "start": 88.96,
+  "end": 92.4,
+  "text": "If you remember one thing from this episode, remember this.",
+  "words": []
+ },
+ {
+  "start": 93.36,
+  "end": 96.8,
+  "text": "Finish small, measure honestly, and keep going.",
+  "words": []
+ },
+ {
+  "start": 98.08,
+  "end": 100.88,
+  "text": "Thanks for listening, and I will see you next week.",
+  "words": []
+ },
+ {
+  "start": 102.16,
+  "end": 105.28,
+  "text": "If you remember one thing from this episode, remember this. Finish small, measure honestly, and keep going.",
+  "words": []
+ },
+ {
+  "start": 106.56,
+  "end": 109.36,
+  "text": "Thanks for listening, and I will see you next week.",
+  "words": []
+ }
+]

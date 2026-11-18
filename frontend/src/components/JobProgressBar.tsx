@@ -20,7 +20,7 @@ export function JobProgressBar({ job }: { job: JobResponse }) {
   }, [job.current_stage_eta_seconds, job.id, job.overall_eta_seconds, job.progress, job.status, job.updated_at]);
 
   return (
-    <section className="clipgen-panel p-4 shadow-sm">
+    <section className="clipgen-panel rounded-2xl p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <span className={`inline-flex border px-2 py-1 text-xs font-medium ${JOB_STATUS_TONES[job.status]}`}>
@@ -66,8 +66,9 @@ export function JobProgressBar({ job }: { job: JobResponse }) {
       )}
 
       {isFailed && job.error_message && (
-        <p className="mt-3 border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+        <p className="mt-3 cg-alert">
           {job.error_message}
+          {job.error_code && <span className="mt-0.5 block font-mono text-[11px] text-rose-500">{job.error_code}</span>}
         </p>
       )}
     </section>

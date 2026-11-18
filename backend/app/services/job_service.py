@@ -7,6 +7,7 @@ update DB status + progress, handle error per stage.
 """
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
@@ -17,24 +18,32 @@ from loguru import logger
 from app.config import settings
 from app.models import Job, Clip
 from app.schemas import JobProcessingOptions, default_processing_options
-from app.core.pipeline.audio_extract import extract_audio, has_audio_stream
+from app.core.pipeline.audio_extract import extract_audio
 from app.core.pipeline.transcribe import transcribe
-from app.core.pipeline.highlight_detect import Highlight, detect_highlights
-from app.core.pipeline.intro_analysis import analyze_youtube_intro
-from app.core.pipeline.clip_cut import cut_clip
-from app.core.pipeline.subtitle_burn import burn_subtitles
+from app.core.edit_model import ClipEdit, build_caption_cues, default_edit
+from app.core.errors import ErrorCode, PipelineError, describe_failure
 from app.core.pipeline.metadata_gen import generate_metadata
-from app.core.pipeline.social_render import render_social_clip
-from app.services.media_probe import probe_video
+from app.core.timeline import TimedSegment, ms_to_seconds, normalize_segments, seconds_to_ms, segments_to_json
+from app.services.candidates import Candidate, generate_candidates
+from app.services.clip_editing import watermark_default
+from app.services.clip_render_service import apply_render_success, render_edit_to_file
+from app.services.media_probe import MediaFacts, probe_media
 from app.services.processing_estimator import build_stage_estimates
 from app.services.eta_calibration import calibrate_stage_estimates
 from app.services.clip_planning import resolve_clip_count
 from app.services.youtube_downloader import download_youtube_video
+from app.services.youtube_access import require_youtube_access
 from app.services.source_metadata import load_youtube_reference_hashtags
 
 
 class JobCancelled(Exception):
     """Raised internally when a queued/running job has been cancelled."""
+
+
+@dataclass(frozen=True)
+class ClipWindow:
+    start: float
+    end: float
 
 
 class JobService:
@@ -55,7 +64,13 @@ class JobService:
         if self.job.status == "cancelled":
             raise JobCancelled(f"Job {self.job_id} cancelled")
 
-    def _update_status(self, status: str, progress: int = None, error_msg: str = None):
+    def _update_status(
+        self,
+        status: str,
+        progress: int = None,
+        error_msg: str = None,
+        error_code: str | None = None,
+    ):
         """Helper untuk update job status + progress ke DB."""
         self._ensure_not_cancelled()
         now = datetime.utcnow()
@@ -63,12 +78,9 @@ class JobService:
         active_stages = {
             "extracting",
             "transcribing",
-            "detecting",
             "cutting",
             "cropping",
             "downloading",
-            "analyzing_intro",
-            "subtitling",
             "generating_metadata",
         }
 
@@ -83,6 +95,8 @@ class JobService:
             self.job.progress = progress
         if error_msg:
             self.job.error_message = error_msg
+        if error_code:
+            self.job.error_code = error_code
         if status in active_stages:
             if self.job.processing_started_at is None:
                 self.job.processing_started_at = now
@@ -94,6 +108,7 @@ class JobService:
             self.job.heartbeat_at = now
             if status == "done":
                 self.job.error_message = None
+                self.job.error_code = None
         self.job.updated_at = now
         self.db.commit()
         logger.info(
@@ -239,90 +254,116 @@ class JobService:
         allowed = {key: value for key, value in stored.items() if key in defaults}
         return JobProcessingOptions.model_validate({**defaults, **allowed})
 
-    def _cleanup_clip_intermediates(self, clip_id: str, final_path: Path) -> None:
-        """Keep only the final user-facing video; failed artifacts are cleaned by maintenance."""
-        for suffix in ("_raw.mp4", "_cropped.mp4", "_rendered.mp4", "_subs.srt", "_subs.ass"):
-            candidate = settings.clips_dir / f"{clip_id}{suffix}"
-            if candidate == final_path:
-                continue
-            try:
-                candidate.unlink(missing_ok=True)
-            except OSError as error:
-                logger.warning(f"Job {self.job_id}: failed deleting {candidate.name}: {error}")
-
-    def _create_clip_record(self, start: float, end: float, score: float) -> Clip:
-        """Buat record clip di DB, status processing."""
+    def _create_clip_record(
+        self,
+        candidate: Candidate,
+        position: int,
+        segments: list[TimedSegment],
+        options: JobProcessingOptions,
+    ) -> Clip:
+        """Persist one candidate with its initial canonical edit document."""
+        # Cues are always prepared from the transcript so captions can be
+        # switched on later in the editor; the job option sets the default.
+        cues = build_caption_cues(segments, candidate.start_ms, candidate.end_ms)
+        edit = default_edit(
+            start_ms=candidate.start_ms,
+            end_ms=candidate.end_ms,
+            output_preset=options.output_preset,
+            visual_style=options.visual_style,
+            captions_enabled=options.burn_captions,
+            cues=cues,
+            watermark_enabled=watermark_default(options),
+        )
+        start = ms_to_seconds(candidate.start_ms)
+        end = ms_to_seconds(candidate.end_ms)
         clip = Clip(
             job_id=self.job_id,
             start_time=start,
             end_time=end,
-            highlight_score=score,
+            suggested_start_time=start,
+            suggested_end_time=end,
+            highlight_score=round(candidate.score, 4),
+            analysis_json=json.dumps(candidate.analysis()),
+            algorithm_version=candidate.algorithm_version,
+            review_status="suggested",
+            position=position,
+            edit_json=edit.model_dump_json(),
+            edit_revision=1,
             status="processing",
         )
         self.db.add(clip)
         self.db.commit()
         return clip
 
-    def _needs_transcript(self, options: JobProcessingOptions) -> bool:
-        # Metadata quality depends on transcript context even when highlight
-        # analysis is deliberately skipped.
-        return bool(options.generate_highlights or options.generate_subtitles or options.generate_metadata)
+    def _add_warning(self, message: str) -> None:
+        """Keep every warning for the job instead of letting the last one win."""
+        current = (self.job.warning_message or "").strip()
+        self.job.warning_message = f"{current} {message}".strip() if message not in current else current
 
-    def _default_highlights(self, options: JobProcessingOptions) -> list[Highlight]:
-        """Build a deterministic clip window when highlight generation is disabled."""
-        duration = float(self.job.source_duration_seconds or options.max_clip_seconds)
-        if duration <= 0:
+    @staticmethod
+    def _language_warning(options: JobProcessingOptions, result) -> str | None:
+        """Flag auto-detection that is unsure or picked an unexpected language."""
+        if options.transcript_language != "auto":
+            return None
+        language = getattr(result, "language", None)
+        probability = getattr(result, "language_probability", None)
+        if not language:
+            return None
+        if probability is not None and probability < settings.whisper_language_min_probability:
+            return (
+                f"Bahasa audio terdeteksi '{language}' dengan keyakinan rendah ({probability:.0%}). "
+                "Jika caption/judul salah bahasa, proses ulang dengan bahasa audio yang dipilih manual."
+            )
+        if language not in {"id", "en", "ms"}:
+            return (
+                f"Bahasa audio terdeteksi '{language}'. Jika video berbahasa Indonesia atau Inggris, "
+                "proses ulang dengan bahasa audio yang dipilih manual."
+            )
+        return None
+
+    def _needs_transcript(self, options: JobProcessingOptions) -> bool:
+        return bool(options.generate_metadata or options.burn_captions)
+
+    def _plan_candidates(
+        self,
+        options: JobProcessingOptions,
+        segments: list[TimedSegment],
+    ) -> list[Candidate]:
+        """Transcript-boundary candidates; evenly spaced windows without a transcript."""
+        duration_ms = seconds_to_ms(self.job.source_duration_seconds or options.max_clip_seconds)
+        if duration_ms <= 0:
             return []
-        end = min(duration, float(options.max_clip_seconds))
-        return [Highlight(start=0.0, end=max(1.0, end), score=0.5)]
+        min_ms = seconds_to_ms(options.min_clip_seconds)
+        max_ms = seconds_to_ms(options.max_clip_seconds)
+        if options.campaign_brief is not None:
+            min_ms = max(min_ms, seconds_to_ms(options.campaign_brief.min_clip_seconds))
+            max_ms = min(max_ms, seconds_to_ms(options.campaign_brief.max_clip_seconds))
+            if min_ms > max_ms:
+                min_ms = max_ms
+        count = min(self._resolved_clip_count(options), 12)
+        if duration_ms < 5_000:
+            return []
+        return generate_candidates(
+            segments,
+            duration_ms=duration_ms,
+            min_ms=min(min_ms, duration_ms),
+            max_ms=min(max_ms, duration_ms),
+            count=count,
+        )
 
     def _resolved_clip_count(self, options: JobProcessingOptions) -> int:
         return resolve_clip_count(self.job.source_duration_seconds, options.clip_count)
 
-    def _automatic_youtube_intro_skip_limit_seconds(self, options: JobProcessingOptions) -> float:
-        """Leave enough usable footage for multiple automatic candidates."""
-        if self.job.source_type != "youtube_url" or options.processing_mode != "automatic":
-            return 0.0
-
-        duration = max(0.0, float(self.job.source_duration_seconds or 0))
-        wanted_content = float(options.min_clip_seconds) * self._resolved_clip_count(options)
-        max_safe_skip = max(0.0, duration - wanted_content)
-        return min(settings.automatic_youtube_intro_max_skip_seconds, max_safe_skip)
-
-    def _analyze_automatic_youtube_intro(
-        self,
-        source_path: Path,
-        options: JobProcessingOptions,
-    ) -> tuple[float, dict[str, object]]:
-        max_safe_skip = self._automatic_youtube_intro_skip_limit_seconds(options)
-        if max_safe_skip <= 0:
-            return 0.0, {"intro_skip_seconds": 0.0, "intro_reason": "source_too_short"}
-
-        analysis = analyze_youtube_intro(
-            source_path,
-            float(self.job.source_duration_seconds or 0),
-            min(settings.automatic_youtube_intro_skip_seconds, max_safe_skip),
-            settings.automatic_youtube_intro_analysis_seconds,
-            max_safe_skip,
-        )
-        decision = {
-            **analysis.as_dict(),
-            "intro_skip_seconds": analysis.skip_seconds,
-            "target_clip_count": self._resolved_clip_count(options),
-            "landscape": True,
-            "subtitles": options.generate_subtitles,
-        }
-        return analysis.skip_seconds, decision
-
     def _clip_metadata_context(
         self,
-        segments,
-        highlight: Highlight,
+        segments: list[TimedSegment],
+        clip_window: ClipWindow,
         processing_options: JobProcessingOptions,
     ) -> str:
+        start_ms, end_ms = seconds_to_ms(clip_window.start), seconds_to_ms(clip_window.end)
         clip_text = " ".join(
             s.text for s in segments
-            if s.start < highlight.end and s.end > highlight.start
+            if s.start_ms < end_ms and s.end_ms > start_ms
         ).strip()
         if clip_text:
             return clip_text
@@ -331,43 +372,28 @@ class JobService:
         if processing_options.metadata_language == "en":
             return (
                 f"Source video: {source_name}. "
-                f"Selected clip from {highlight.start:.0f}s to {highlight.end:.0f}s."
+                f"Selected clip from {clip_window.start:.0f}s to {clip_window.end:.0f}s."
             )
         return (
             f"Video sumber: {source_name}. "
-            f"Klip dipilih dari detik {highlight.start:.0f} sampai {highlight.end:.0f}."
+            f"Klip dibuat dari detik {clip_window.start:.0f} sampai {clip_window.end:.0f}."
         )
 
     async def process(self):
         """
-        Jalankan pipeline sesuai opsi job. Upload lokal default tetap memakai
-        transcribe/detect/metadata seperti perilaku lama, sementara YouTube
-        Automatic YouTube analysis skips the opening montage/intro when safe
-        and detects a duration-adaptive set of distinct highlights. Social
-        format, subtitles, and hook remain the job's explicit options.
-        Jika ada error di stage tertentu, set job.status=failed dan return early.
+        Run the pipeline: probe -> (audio -> transcript -> normalize) -> candidates
+        -> per-candidate initial edit, validated render, and metadata.
+
+        A failed clip does not fail the job; a failed stage before clipping
+        marks the job failed with a stable error code.
         """
         audio_path = None
         try:
             self._ensure_not_cancelled()
             processing_options = self._get_processing_options()
-            source_path = self._prepare_source(processing_options)
-            needs_transcript = self._needs_transcript(processing_options)
-            segments = []
-            automatic_intro_skip_seconds = 0.0
-
-            if (
-                self.job.source_type == "youtube_url"
-                and processing_options.processing_mode == "automatic"
-                and processing_options.generate_highlights
-            ):
-                self._update_status("analyzing_intro", progress=8)
-                automatic_intro_skip_seconds, decision = self._analyze_automatic_youtube_intro(
-                    source_path,
-                    processing_options,
-                )
-                self.job.automatic_summary_json = json.dumps(decision)
-                self.db.commit()
+            source_path, media = self._prepare_source(processing_options)
+            needs_transcript = self._needs_transcript(processing_options) and media.has_audio
+            segments: list[TimedSegment] = []
 
             if needs_transcript:
                 # Stage 1: Extract Audio
@@ -377,65 +403,64 @@ class JobService:
 
                 # Stage 2: Transcribe
                 self._update_status("transcribing", progress=30)
-                segments = transcribe(
-                    audio_path,
-                    on_progress=self._record_transcription_heartbeat,
-                    timeout_seconds=self._transcription_timeout_seconds(),
-                    heartbeat_interval_seconds=settings.job_heartbeat_interval_seconds,
-                    include_word_timestamps=processing_options.generate_subtitles,
-                )
+                try:
+                    raw_segments = transcribe(
+                        audio_path,
+                        on_progress=self._record_transcription_heartbeat,
+                        timeout_seconds=self._transcription_timeout_seconds(),
+                        heartbeat_interval_seconds=settings.job_heartbeat_interval_seconds,
+                        include_word_timestamps=False,
+                        language=(
+                            None
+                            if processing_options.transcript_language == "auto"
+                            else processing_options.transcript_language
+                        ),
+                    )
+                except JobCancelled:
+                    raise
+                except Exception as error:
+                    code = (
+                        ErrorCode.TRANSCRIPTION_TIMEOUT
+                        if type(error).__name__ == "TranscriptionTimeoutError"
+                        else ErrorCode.TRANSCRIPTION_FAILED
+                    )
+                    raise PipelineError(code, str(error)) from error
                 self._ensure_not_cancelled()
-                self.job.transcript_json = json.dumps(
-                    [
-                        {
-                            "start": segment.start,
-                            "end": segment.end,
-                            "text": segment.text,
-                            "words": [
-                                {"start": word.start, "end": word.end, "text": word.text}
-                                for word in segment.words
-                            ],
-                        }
-                        for segment in segments
-                    ]
+                segments, report = normalize_segments(
+                    raw_segments, seconds_to_ms(self.job.source_duration_seconds) or None
                 )
+                self.job.transcript_json = json.dumps(segments_to_json(segments))
+                summary = self.job.automatic_summary
+                summary["transcript"] = {
+                    "segments": report.kept_count,
+                    "dropped_empty": report.dropped_empty,
+                    "dropped_invalid": report.dropped_invalid,
+                    "clamped": report.clamped,
+                    "reordered": report.reordered,
+                    "repetitions_collapsed": report.repetitions_collapsed,
+                    "model": settings.whisper_model_size,
+                    "requested_language": processing_options.transcript_language,
+                    "language": getattr(raw_segments, "language", None),
+                    "language_probability": getattr(raw_segments, "language_probability", None),
+                }
+                language_warning = self._language_warning(processing_options, raw_segments)
+                if language_warning:
+                    self._add_warning(language_warning)
+                self.job.automatic_summary_json = json.dumps(summary)
                 self.db.commit()
             else:
                 self.job.transcript_json = "[]"
                 self.db.commit()
 
-            if processing_options.generate_highlights:
-                # Stage 3: Detect Highlights
-                self._update_status("detecting", progress=50)
-                duration = segments[-1].end if segments else self.job.source_duration_seconds or 0
-                highlights = detect_highlights(
-                    segments,
-                    audio_path,
-                    duration,
-                    min_clip_seconds=processing_options.min_clip_seconds,
-                    max_clip_seconds=processing_options.max_clip_seconds,
-                    top_n=self._resolved_clip_count(processing_options),
-                    exclude_before_seconds=automatic_intro_skip_seconds,
-                    min_separation_seconds=(
-                        settings.automatic_youtube_min_segment_gap_seconds
-                        if processing_options.processing_mode == "automatic"
-                        else 0
-                    ),
-                    context_aware=processing_options.context_aware,
-                )
-                self._ensure_not_cancelled()
+            candidates = self._plan_candidates(processing_options, segments)
+            self._ensure_not_cancelled()
 
-                if not highlights:
-                    logger.warning(f"Job {self.job_id}: tidak ada highlight terdeteksi")
-                    highlights = []  # proceed dengan empty, jangan fail total
-            else:
-                highlights = self._default_highlights(processing_options)
-                logger.info(f"Job {self.job_id}: highlight detection skipped, using default clip window")
-
-            # Stage 4 onward: Per-clip processing
-            n_clips = len(highlights)
+            n_clips = len(candidates)
             if n_clips == 0:
-                self.job.warning_message = "Tidak ada highlight yang cukup kuat terdeteksi dari video ini."
+                self._add_warning("Video tidak cukup panjang untuk menghasilkan klip.")
+                summary = self.job.automatic_summary
+                summary["candidate_warning"] = ErrorCode.CANDIDATE_EMPTY.value
+                self.job.automatic_summary_json = json.dumps(summary)
                 self.db.commit()
                 self._update_status("done", progress=100)
                 logger.warning(f"Job {self.job_id}: finished dengan 0 clips")
@@ -451,92 +476,54 @@ class JobService:
                 processing_options.output_preset != "original"
                 or processing_options.visual_style != "clean"
             )
-            needs_text_overlay = bool(
-                processing_options.generate_subtitles or processing_options.hook_text
-            )
+            render_stage = "cropping" if needs_social_render else "cutting"
             self._planned_stage_occurrences = {
-                ("cropping" if needs_social_render else "cutting"): n_clips,
-                **({"subtitling": n_clips} if needs_text_overlay else {}),
+                render_stage: n_clips,
                 **({"generating_metadata": n_clips} if processing_options.generate_metadata else {}),
             }
-            for clip_idx, highlight in enumerate(highlights):
+            for clip_idx, candidate in enumerate(candidates):
                 clip = None
                 try:
                     self._ensure_not_cancelled()
-                    # Create clip record
-                    clip = self._create_clip_record(highlight.start, highlight.end, highlight.score)
+                    clip = self._create_clip_record(candidate, clip_idx + 1, segments, processing_options)
 
-                    if needs_social_render:
-                        # One FFmpeg pass: seek/cut + social reframe + final encode.
-                        self._update_status("cropping")
-                        final_clip_path = render_social_clip(
-                            source_path,
-                            settings.clips_dir,
-                            clip.id,
-                            output_preset=processing_options.output_preset,
-                            visual_style=processing_options.visual_style,
-                            acceleration=processing_options.render_acceleration,
-                            start_time=highlight.start,
-                            end_time=highlight.end,
-                            on_heartbeat=self._record_stage_heartbeat,
-                            heartbeat_seconds=settings.job_heartbeat_interval_seconds,
-                        )
-                        self._ensure_not_cancelled()
-                    else:
-                        self._update_status("cutting")
-                        final_clip_path = cut_clip(
-                            source_path,
-                            highlight.start,
-                            highlight.end,
-                            settings.clips_dir,
-                            clip.id,
-                            processing_options.render_acceleration,
-                            on_heartbeat=self._record_stage_heartbeat,
-                            heartbeat_seconds=settings.job_heartbeat_interval_seconds,
-                        )
-                        self._ensure_not_cancelled()
-
-                    if needs_text_overlay:
-                        self._update_status("subtitling")
-                        final_clip_path = burn_subtitles(
-                            final_clip_path,
-                            segments,
-                            clip.id,
-                            settings.clips_dir,
-                            clip_start_time=highlight.start,
-                            include_subtitles=processing_options.generate_subtitles,
-                            subtitle_style=processing_options.subtitle_style,
-                            hook_text=processing_options.hook_text,
-                            acceleration=processing_options.render_acceleration,
-                            on_heartbeat=self._record_stage_heartbeat,
-                            heartbeat_seconds=settings.job_heartbeat_interval_seconds,
-                        )
-                        self._ensure_not_cancelled()
+                    self._update_status(render_stage)
+                    outcome = render_edit_to_file(
+                        source_path=source_path,
+                        source=media,
+                        edit=ClipEdit.model_validate_json(clip.edit_json),
+                        clip_id=clip.id,
+                        revision=int(clip.edit_revision),
+                        acceleration=processing_options.render_acceleration,
+                        on_heartbeat=self._record_stage_heartbeat,
+                        heartbeat_seconds=settings.job_heartbeat_interval_seconds,
+                    )
+                    self._ensure_not_cancelled()
 
                     metadata = {}
                     if processing_options.generate_metadata:
                         self._update_status("generating_metadata")
                         metadata_context = self._clip_metadata_context(
                             segments,
-                            highlight,
+                            ClipWindow(
+                                start=ms_to_seconds(candidate.start_ms),
+                                end=ms_to_seconds(candidate.end_ms),
+                            ),
                             processing_options,
                         )
                         metadata = generate_metadata(
                             metadata_context,
                             processing_options.metadata_language,
                             source_reference_hashtags,
+                            processing_options.campaign_brief,
                         )
                         self._ensure_not_cancelled()
 
-                    # Update clip record dengan hasil akhir
-                    clip.file_path = str(final_clip_path)
+                    apply_render_success(clip, outcome, int(clip.edit_revision))
                     clip.title = metadata.get("title")
                     clip.caption = metadata.get("caption")
                     clip.hashtags = json.dumps(metadata.get("hashtags", []))
-                    clip.status = "ready"
                     self.db.commit()
-                    self._cleanup_clip_intermediates(clip.id, final_clip_path)
-
                     logger.info(f"Clip {clip.id} selesai: {clip.title}")
 
                 except JobCancelled:
@@ -544,16 +531,22 @@ class JobService:
                     raise
                 except Exception as e:
                     logger.error(f"Error processing clip {clip_idx} pada job {self.job_id}: {e}")
-                    # Mark clip sebagai failed, tapi continue ke clip berikutnya (jangan fail total job)
+                    # Mark the clip failed, but continue with the next candidate.
                     failed_clips += 1
+                    self.db.rollback()
                     if clip is not None:
+                        code, message = describe_failure(e)
                         clip.status = "failed"
+                        clip.render_error_code = (
+                            ErrorCode.EXPORT_FAILED.value if code == ErrorCode.UNKNOWN else code.value
+                        )
+                        clip.render_error_message = message
                     self.db.commit()
                     continue
 
             # Mark job done
             if failed_clips:
-                self.job.warning_message = f"{failed_clips} clip gagal dibuat. Periksa status clip untuk detailnya."
+                self._add_warning(f"{failed_clips} clip gagal dibuat. Periksa status clip untuk detailnya.")
                 self.db.commit()
             self._update_status("done", progress=100)
             logger.info(f"Job {self.job_id} completed successfully")
@@ -566,8 +559,9 @@ class JobService:
             # rollback.  Recover it before recording the terminal job status.
             self.db.rollback()
             logger.error(f"Fatal error di job {self.job_id}: {e}", exc_info=True)
+            code, message = describe_failure(e)
             try:
-                self._update_status("failed", progress=0, error_msg=str(e)[:500])
+                self._update_status("failed", progress=0, error_msg=message, error_code=code.value)
             except JobCancelled:
                 self.db.rollback()
                 logger.info(f"Job {self.job_id}: fatal error ignored karena job sudah cancelled")
@@ -584,11 +578,15 @@ class JobService:
                 except OSError as error:
                     logger.warning(f"Job {self.job_id}: failed deleting temporary audio: {error}")
 
-    def _prepare_source(self, processing_options: JobProcessingOptions) -> Path:
+    def _prepare_source(self, processing_options: JobProcessingOptions) -> tuple[Path, MediaFacts]:
         """Download a queued YouTube source when needed and persist the actual media facts."""
         stored_source = self.job.source_path
         source_path = Path(stored_source)
         if self.job.source_type == "youtube_url" and stored_source.startswith(("http://", "https://")):
+            # Repeat the submission gate immediately before yt-dlp in case a
+            # previous queued job received a bot block while this one waited.
+            # This performs no outbound request when access is on cooldown.
+            require_youtube_access()
             self._update_status("downloading", progress=5)
             source_path = download_youtube_video(
                 self.job.source_path,
@@ -604,13 +602,14 @@ class JobService:
             self.job.source_name = self._youtube_source_name() or self.job.source_name
 
         if not source_path.exists():
-            raise FileNotFoundError("File sumber tidak ditemukan. Upload ulang video untuk memprosesnya.")
+            raise PipelineError(ErrorCode.SOURCE_MISSING)
 
-        video_info = probe_video(source_path)
-        if not video_info:
-            raise ValueError("File video tidak valid atau corrupt setelah diterima.")
-        if self._needs_transcript(processing_options) and not has_audio_stream(source_path):
-            raise ValueError("Video tidak punya audio track. Gunakan video dengan suara/speech.")
+        media = probe_media(source_path)
+        if media is None:
+            raise PipelineError(ErrorCode.SOURCE_CORRUPT, "ffprobe tidak menemukan stream video")
+        if processing_options.generate_metadata and not media.has_audio:
+            raise PipelineError(ErrorCode.AUDIO_MISSING)
+        video_info = media
 
         self.job.source_path = str(source_path)
         self.job.source_duration_seconds = video_info.duration_seconds
@@ -626,7 +625,7 @@ class JobService:
             summary["eta_calibration_factors"] = factors
             self.job.automatic_summary_json = json.dumps(summary)
         self.db.commit()
-        return source_path
+        return source_path, media
 
     def _youtube_source_name(self) -> str | None:
         info_path = settings.upload_dir / f"{self.job_id}.info.json"
