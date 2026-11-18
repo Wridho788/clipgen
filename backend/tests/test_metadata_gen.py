@@ -1,5 +1,6 @@
 import pytest
 
+from app.core.pipeline import gemini_client
 from app.core.pipeline import metadata_gen
 from app.core.pipeline.metadata_gen import _normalize_hashtags, _parse_response
 from app.schemas import CampaignBrief
@@ -85,3 +86,72 @@ def test_campaign_brief_adds_required_metadata_constraints(monkeypatch):
 
     assert "YAVA" in metadata["hashtags"]
     assert "Klik keranjang kuning" in metadata["caption"]
+
+
+def test_generate_metadata_uses_gemini_when_the_provider_is_configured(monkeypatch):
+    """The provider setting decides which backend runs."""
+    called = {}
+
+    def fake_gemini(transcript_text, language="id", campaign_brief=None):
+        called["gemini"] = True
+        return '{"title":"Dari Gemini","caption":"Caption","hashtags":[]}'
+
+    def fake_ollama(*args, **kwargs):
+        called["ollama"] = True
+        return '{"title":"Dari Ollama","caption":"Caption","hashtags":[]}'
+
+    monkeypatch.setattr(metadata_gen.settings, "metadata_provider", "gemini")
+    monkeypatch.setattr(metadata_gen, "_call_gemini", fake_gemini)
+    monkeypatch.setattr(metadata_gen, "_call_ollama", fake_ollama)
+
+    metadata = metadata_gen.generate_metadata("Transkrip yang cukup panjang untuk diuji")
+
+    assert metadata["title"] == "Dari Gemini"
+    assert called.get("gemini") is True
+    assert "ollama" not in called
+
+
+def test_call_gemini_passes_the_campaign_brief_to_the_prompt(monkeypatch):
+    """The brief must reach the model, not just be applied afterwards."""
+    captured = {}
+
+    def fake_generate(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return gemini_client.GeminiResult(text='{"title":"A","caption":"B","hashtags":[]}', model="m", attempts=1)
+
+    brief = CampaignBrief(id="yava", name="YAVA", hashtags=["YAVA"], cta="Klik keranjang kuning")
+
+    monkeypatch.setattr(metadata_gen.settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(metadata_gen.gemini_client, "generate_text", fake_generate)
+
+    result = metadata_gen._call_gemini("Transkrip yang cukup panjang", "id", brief)
+
+    assert result == '{"title":"A","caption":"B","hashtags":[]}'
+    assert "YAVA" in captured["prompt"]
+    assert "Klik keranjang kuning" in captured["prompt"]
+    assert captured["kwargs"]["api_key"] == "test-key"
+
+
+def test_call_gemini_requires_a_key(monkeypatch):
+    monkeypatch.setattr(metadata_gen.settings, "gemini_api_key", None)
+
+    with pytest.raises(RuntimeError):
+        metadata_gen._call_gemini("Transkrip yang cukup panjang")
+
+
+def test_call_gemini_asks_for_json_and_an_indonesian_prompt(monkeypatch):
+    captured = {}
+
+    def fake_generate(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return gemini_client.GeminiResult(text="{}", model="m", attempts=1)
+
+    monkeypatch.setattr(metadata_gen.settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(metadata_gen.gemini_client, "generate_text", fake_generate)
+
+    metadata_gen._call_gemini("Transkrip yang cukup panjang", "id")
+
+    assert "Bahasa Indonesia" in captured["prompt"]
+    assert captured["kwargs"]["json_mode"] is True

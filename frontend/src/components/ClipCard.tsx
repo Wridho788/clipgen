@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Download, Edit3, ExternalLink, Facebook, Loader2, RefreshCw, Save, Scissors, ShieldAlert, ShieldCheck, Trash2, X, Youtube } from "lucide-react";
+import { AlertTriangle, Download, Edit3, ExternalLink, Facebook, Loader2, RefreshCw, Save, Scissors, ShieldAlert, ShieldCheck, Sparkles, Trash2, X, Youtube } from "lucide-react";
 import { ClipResponse, parseHashtags } from "@/types/api";
 import { api } from "@/lib/api";
 import { useDeleteClip, useTrimClip, useUpdateClip } from "@/hooks/useClips";
@@ -37,6 +37,13 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
   const queryClient = useQueryClient();
   const rerender = useMutation({
     mutationFn: () => api.renderClip(clip.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["clips", clip.job_id] }),
+  });
+  // Regenerating metadata re-runs the configured AI provider (Gemini or
+  // Ollama) over the stored transcript. It never touches the captions, so
+  // manual caption corrections survive.
+  const regenerateMetadata = useMutation({
+    mutationFn: () => api.regenerateClipMetadata(clip.id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["clips", clip.job_id] }),
   });
 
@@ -303,6 +310,22 @@ export function ClipCard({ clip, embedded = false }: { clip: ClipResponse; embed
               <Edit3 className="h-4 w-4" />
               Edit
             </button>
+            <button
+              onClick={() => regenerateMetadata.mutate()}
+              disabled={regenerateMetadata.isPending}
+              className="inline-flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:border-slate-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-cyan-300"
+              title="Buat ulang judul, caption, dan hashtag dengan AI"
+            >
+              {regenerateMetadata.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {regenerateMetadata.isPending ? "Membuat..." : "Buat ulang dengan AI"}
+            </button>
+            {regenerateMetadata.error && (
+              <p className="cg-alert w-full">
+                {regenerateMetadata.error instanceof Error
+                  ? regenerateMetadata.error.message
+                  : "Gagal membuat metadata dengan AI"}
+              </p>
+            )}
             {!embedded && <button
               onClick={() => setIsTrimming(true)}
               className="inline-flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:border-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-cyan-300"

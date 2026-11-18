@@ -25,6 +25,7 @@ from app.database import SessionLocal, init_db, recover_jobs_after_startup
 from app.services.job_dispatcher import enqueue_job
 from app.services.job_queue import get_job_queue
 from app.services.maintenance import maintenance_loop
+from app.core.pipeline import gemini_client
 from app.core.pipeline.metadata_gen import test_ollama_connection
 from app.api.routes import auth, videos, jobs, clips, system, campaigns
 
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
     try:
         if settings.metadata_provider == "gemini":
             if settings.gemini_api_key:
-                logger.info(f"✅ Gemini metadata provider configured ({settings.gemini_model})")
+                logger.info(f"✅ Gemini metadata provider configured ({settings.gemini_model_chain})")
             else:
                 logger.warning("⚠️  GEMINI_API_KEY is missing; metadata generation will fallback")
         else:
@@ -192,13 +193,22 @@ async def readiness():
         logger.error(f"Readiness database check failed: {error}")
 
     ollama_ready = await asyncio.to_thread(test_ollama_connection)
+    # A configured key is not the same as a usable one: the free tier
+    # rejects expired keys and models the key may not call. The check reads
+    # the model endpoint, so it spends no generation quota.
+    gemini_ready = (
+        await asyncio.to_thread(gemini_client.check_connection, settings.gemini_api_key)
+        if settings.metadata_provider == "gemini" and settings.gemini_api_key
+        else False
+    )
     return {
         "status": "ok" if database_ready else "unavailable",
         "database": database_ready,
         "ollama": ollama_ready,
+        "gemini": gemini_ready,
         "metadata_provider": settings.metadata_provider,
         "metadata_configured": (
-            bool(settings.gemini_api_key)
+            gemini_ready
             if settings.metadata_provider == "gemini"
             else ollama_ready
         ),

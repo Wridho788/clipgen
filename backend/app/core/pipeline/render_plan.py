@@ -19,6 +19,7 @@ from pathlib import Path
 
 from app.core.edit_model import CaptionCue, CaptionStyle, ClipEdit, output_dimensions, wrap_caption_text
 from app.core.timeline import ms_to_ffmpeg
+from app.config import settings
 
 ZOOM_FACTOR = 1.12
 
@@ -135,7 +136,14 @@ def build_video_filter(
         )
     chain = ["setsar=1"]
     if ass_path is not None:
-        chain.append(f"ass=filename='{_escape_filter_path(ass_path)}'")
+        ass_filter = f"ass=filename='{_escape_filter_path(ass_path)}'"
+        # ``fontsdir`` points libass at a font folder directly. Without it
+        # libass relies on fontconfig, which some FFmpeg builds (notably on
+        # Windows) cannot use at all.
+        fonts_dir = _font_directory()
+        if fonts_dir:
+            ass_filter += f":fontsdir='{_escape_filter_path(Path(fonts_dir))}'"
+        chain.append(ass_filter)
     if watermark_filter:
         chain.append(watermark_filter)
     chain.append("format=yuv420p")
@@ -209,6 +217,14 @@ def _escape_ass_text(value: str) -> str:
 
 def _escape_filter_path(path: Path) -> str:
     return str(path).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+
+
+def _font_directory() -> str | None:
+    """The folder holding the configured render font, if one is set."""
+    font_file = (settings.render_font_file or "").strip()
+    if not font_file:
+        return None
+    return str(Path(font_file).parent)
 
 
 def _even(value: int) -> int:

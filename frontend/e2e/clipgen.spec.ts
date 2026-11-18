@@ -266,6 +266,68 @@ test.describe("ClipGen browser QA", () => {
     await page.getByRole("button", { name: "Trim" }).click();
     await page.getByRole("button", { name: "Render trim" }).click();
   });
+
+  test("regenerates clip metadata with AI and shows the new title", async ({ page }) => {
+    let clipTitle = "Moment Test";
+    let regenerateCalls = 0;
+    await mockApi(page, {
+      jobById: {
+        "done-job-1": jobFixture({ id: "done-job-1", status: "done", progress: 100 }),
+      },
+      clipsByJob: {
+        "done-job-1": () => [
+          clipFixture({
+            id: "clip-1",
+            job_id: "done-job-1",
+            title: clipTitle,
+            caption: "Caption awal",
+            hashtags: JSON.stringify(["clipgen"]),
+          }),
+        ],
+      },
+      onRegenerateMetadata: async (route) => {
+        regenerateCalls += 1;
+        clipTitle = "Judul dari AI";
+        await json(route, clipFixture({ id: "clip-1", job_id: "done-job-1", title: clipTitle }));
+      },
+    });
+
+    await page.goto("/jobs/done-job-1");
+
+    await expect(page.getByRole("button", { name: "Buat ulang dengan AI" })).toBeVisible();
+    await page.getByRole("button", { name: "Buat ulang dengan AI" }).click();
+
+    await expect.poll(() => regenerateCalls).toBe(1);
+    await expect(page.getByText("Judul dari AI").first()).toBeVisible();
+  });
+
+  test("reports a failed AI metadata regeneration without losing the clip", async ({ page }) => {
+    await mockApi(page, {
+      jobById: {
+        "done-job-1": jobFixture({ id: "done-job-1", status: "done", progress: 100 }),
+      },
+      clipsByJob: {
+        "done-job-1": () => [
+          clipFixture({ id: "clip-1", job_id: "done-job-1", title: "Moment Test" }),
+        ],
+      },
+      onRegenerateMetadata: async (route) => {
+        await route.fulfill({
+          status: 409,
+          headers: corsHeaders("application/json"),
+          body: JSON.stringify({ detail: "Transkrip job tidak tersedia untuk membuat metadata ulang." }),
+        });
+      },
+    });
+
+    await page.goto("/jobs/done-job-1");
+
+    await page.getByRole("button", { name: "Buat ulang dengan AI" }).click();
+
+    await expect(page.getByText("Transkrip job tidak tersedia untuk membuat metadata ulang.")).toBeVisible();
+    // The clip and its existing metadata stay usable after a failed attempt.
+    await expect(page.getByText("Moment Test").first()).toBeVisible();
+  });
 });
 
 type MockApiOptions = {
@@ -275,6 +337,7 @@ type MockApiOptions = {
   onYoutubePost?: (postData: string) => unknown;
   youtubePreflight?: unknown;
   onClipPatch?: (route: Route) => Promise<void>;
+  onRegenerateMetadata?: (route: Route) => Promise<void>;
   onStorageClear?: () => unknown;
 };
 
@@ -364,6 +427,11 @@ async function mockApi(page: Page, options: MockApiOptions) {
 
     if (method === "PATCH" && path === "/api/clips/clip-1" && options.onClipPatch) {
       await options.onClipPatch(route);
+      return;
+    }
+
+    if (method === "POST" && /^\/api\/clips\/[^/]+\/regenerate-metadata$/.test(path) && options.onRegenerateMetadata) {
+      await options.onRegenerateMetadata(route);
       return;
     }
 

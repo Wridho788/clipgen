@@ -77,3 +77,25 @@ def test_social_render_can_explicitly_skip_the_default_watermark(monkeypatch, tm
     )
 
     assert not any("drawtext=" in part for part in commands[0])
+
+
+def test_watermark_uses_fontconfig_by_default(monkeypatch):
+    monkeypatch.setattr(social_render.settings, "render_font_file", None)
+
+    graph = social_render._append_watermark("[base]", "@RidhoWahyu", 0.78, "bottom_right", 1080, 1920)
+
+    assert "fontfile" not in graph
+
+
+def test_watermark_uses_the_configured_font_file(monkeypatch):
+    """A host whose FFmpeg cannot use fontconfig needs an explicit file."""
+    monkeypatch.setattr(social_render.settings, "render_font_file", r"C:\Windows\Fonts\arial.ttf")
+
+    graph = social_render._append_watermark("[base]", "@RidhoWahyu", 0.78, "bottom_right", 1080, 1920)
+
+    assert "fontfile='C\\:/Windows/Fonts/arial.ttf'" in graph
+    # The colon must be escaped, or FFmpeg parses the path as filter options.
+    assert "fontfile='C:/Windows/Fonts/arial.ttf'" not in graph
+    # The rest of the filter must survive the rewrite.
+    assert "text='@RidhoWahyu'" in graph
+    assert "boxborderw=8" in graph

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.core.edit_model import AudioSettings, CaptionCue, CaptionSettings, CaptionStyle, ClipEdit, Framing
+from app.core.pipeline import render_plan
 from app.core.pipeline.render_plan import (
     SourceFacts,
     build_ass_document,
@@ -37,7 +38,9 @@ def test_plan_seeks_and_limits_duration_from_saved_trim():
     assert command[command.index("-t") + 1] == "20.000"
     assert command.index("-ss") < command.index("-i")
     assert (plan.width, plan.height, plan.duration_ms) == (1080, 1920, 20_000)
-    assert command[-1] == "/tmp/out.partial.mp4"
+    # The output path is a real filesystem path, so its separator follows the
+    # host. Compare the parts, not the raw string.
+    assert Path(command[-1]).name == "out.partial.mp4"
     assert "+faststart" in command
 
 
@@ -110,3 +113,26 @@ def test_ass_document_scales_font_to_canvas():
 def test_no_ass_document_without_visible_captions():
     assert build_ass_document(_edit(), 1080, 1920) is None
     assert _plan(_edit()).ass_document is None
+
+
+def test_caption_filter_uses_fontconfig_by_default(monkeypatch):
+    monkeypatch.setattr(render_plan.settings, "render_font_file", None)
+
+    graph = build_video_filter(
+        _edit(), 1080, 1920, ass_path=Path("/tmp/captions.ass"), watermark_filter=None
+    )
+
+    assert "fontsdir" not in graph
+
+
+def test_caption_filter_points_libass_at_the_configured_font_folder(monkeypatch):
+    """A host whose FFmpeg cannot use fontconfig needs an explicit folder."""
+    monkeypatch.setattr(render_plan.settings, "render_font_file", r"C:\Windows\Fonts\arial.ttf")
+
+    graph = build_video_filter(
+        _edit(), 1080, 1920, ass_path=Path("/tmp/captions.ass"), watermark_filter=None
+    )
+
+    assert "fontsdir='C\\:/Windows/Fonts'" in graph
+    # The colon must be escaped, or FFmpeg parses the path as filter options.
+    assert "fontsdir='C:/Windows/Fonts'" not in graph

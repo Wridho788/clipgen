@@ -67,8 +67,15 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: int = 30
     ollama_num_predict: int = 220
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.8-flash"
+    # Comma-separated models tried in order. The free tier gives each model
+    # its own per-minute quota bucket, so the next model in the list is a
+    # genuine second chance rather than the same exhausted bucket again.
+    gemini_model_chain: str = "gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
     gemini_timeout_seconds: int = 30
+    # Attempts on one model before the chain moves on. The free tier answers
+    # 429 without a Retry-After header, so the delay is ours to choose.
+    gemini_max_attempts_per_model: int = 2
+    gemini_retry_backoff_seconds: float = 1.5
     metadata_default_language: Literal["id", "en"] = "id"
 
     # --- YouTube download ---
@@ -104,6 +111,14 @@ class Settings(BaseSettings):
     watermark_text: str = "@RidhoWahyu"
     watermark_opacity: float = Field(default=0.78, ge=0.1, le=1.0)
     watermark_position: Literal["bottom_right", "bottom_left", "top_right", "top_left"] = "bottom_right"
+    # Font file used for captions and the watermark.  Leave empty to let
+    # FFmpeg resolve a default through fontconfig, which is what the Docker
+    # image does.  Set it on a host whose FFmpeg build has no working
+    # fontconfig (some Windows builds segfault on it): e.g.
+    #   C:/Windows/Fonts/arial.ttf
+    # The same file also tells libass where to look, so both the caption
+    # track and the watermark render with the same typeface.
+    render_font_file: str | None = None
 
     # --- Upload limits ---
     max_upload_size_mb: int = 2048  # 2GB, wajar untuk video panjang personal use

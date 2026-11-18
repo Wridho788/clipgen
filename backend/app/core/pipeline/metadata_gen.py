@@ -15,6 +15,7 @@ import requests
 from loguru import logger
 
 from app.config import settings
+from app.core.pipeline import gemini_client
 from app.schemas import CampaignBrief
 
 
@@ -128,7 +129,11 @@ def _call_gemini(
     language: str = "id",
     campaign_brief: CampaignBrief | None = None,
 ) -> str:
-    """Call Gemini generateContent. The API key stays in a request header."""
+    """Call Gemini generateContent. The API key stays in a request header.
+
+    The free tier is unreliable for any single model, so the shared client
+    walks a fallback chain of models and retries transient failures.
+    """
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY belum dikonfigurasi")
 
@@ -161,31 +166,18 @@ Jangan menambah klaim atau konteks yang tidak ada di transkrip."""
     if campaign_brief:
         prompt += _campaign_instructions(campaign_brief, language)
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent"
+    logger.info(f"Calling Gemini (chain: {settings.gemini_model_chain})")
+    result = gemini_client.generate_text(
+        prompt,
+        api_key=settings.gemini_api_key,
+        model_chain=settings.gemini_model_chain,
+        timeout_seconds=settings.gemini_timeout_seconds,
+        max_attempts_per_model=settings.gemini_max_attempts_per_model,
+        backoff_seconds=settings.gemini_retry_backoff_seconds,
+        json_mode=True,
     )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
-    logger.info(f"Calling Gemini model: {settings.gemini_model}")
-    response = requests.post(
-        url,
-        headers={"x-goog-api-key": settings.gemini_api_key},
-        json=payload,
-        timeout=settings.gemini_timeout_seconds,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Gemini API error {response.status_code}: {response.text[:200]}")
-
-    candidates = response.json().get("candidates") or []
-    parts = (candidates[0].get("content") or {}).get("parts") or [] if candidates else []
-    text_parts = [part.get("text", "") for part in parts if isinstance(part, dict)]
-    result = "".join(text_parts).strip()
-    if not result:
-        raise ValueError("Gemini returned no metadata text")
-    return result
+    logger.info(f"Gemini answered with {result.model} after {result.attempts} attempt(s)")
+    return result.text
 
 
 def _parse_response(response_text: str, language: str = "id") -> dict:
